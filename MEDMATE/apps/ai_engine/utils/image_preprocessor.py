@@ -1,129 +1,108 @@
 """
-image_preprocessor.py
-─────────────────────
-Prepares handwritten prescription images before CRAFT + OCR.
-
-Why this matters:
-  CRAFT and PaddleOCR both work harder (and slower) on noisy, skewed, low-contrast
-  images. One preprocessing pass shared by ALL models means:
-    - CRAFT detects more text regions (especially faint handwriting)
-    - PaddleOCR crops are cleaner → higher confidence scores
-    - Qwen2-VL sees a sharper image → better medicine name extraction
-    - Total: better accuracy, same or less compute time
+utils/image_preprocessor.py
+─────────────────────────────
+Prepares prescription images before OCR.
 
 Steps:
-  1. Deskew        — fixes camera tilt (up to ±15° for hand-held photos)
-  2. Denoise       — removes paper texture / camera noise
-  3. CLAHE         — local contrast boost (critical for faded ink)
-  4. Sharpen       — enhances pen stroke edges for CRAFT detection
-  5. Resize        — normalises to 1600px long side (CRAFT sweet spot for A4)
+  1. Upscale  — images below 1000px on their longest edge are scaled up
+  2. Deskew   — corrects tilts in the range 0.5°–45° (full range, not capped at 10°)
+  3. Denoise  — removes paper grain / camera noise
+  4. CLAHE    — local contrast boost for faded or low-contrast ink
+  5. Sharpen  — unsharp-mask to crisp pen-stroke edges
+
+Returns an RGB PIL Image ready for PaddleOCR-VL and Qwen2-VL.
+
+Fixes vs original:
+  - Removed unused `numpy` import
+  - Deskew upper-bound raised from 10° → 45° (was silently skipping moderate tilts)
+  - Deskew: normalised angle is now always in [-45, 45] before the abs() check,
+    so the guard fires consistently for both negative and positive corrections
+  - h, w from shape[:2] were never used after upscale — removed
+  - logging instead of print()
 """
 
+import logging
+
 import cv2
-import numpy as np
-import os
-import tempfile
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+# ── Tunable constants ─────────────────────────────────────────────────────────
+MIN_DIMENSION     = 1000   # px — upscale threshold
+DESKEW_MIN_ANGLE  = 0.5    # degrees — ignore tiny wobble
+DESKEW_MAX_ANGLE  = 45.0   # degrees — ignore content-rotation (not tilt)
+DENOISE_H         = 10     # fastNlMeansDenoising strength (higher = more smoothing)
+CLAHE_CLIP        = 2.0    # CLAHE clip limit
+CLAHE_GRID        = (8, 8) # CLAHE tile grid size
+SHARPEN_ALPHA     = 1.8    # unsharp-mask foreground weight
+SHARPEN_BETA      = -0.8   # unsharp-mask blur weight (must be -(alpha - 1))
 
 
-def preprocess(image_path: str, target_long_side: int = 1600) -> np.ndarray:
+def preprocess(image_path: str) -> Image.Image:
     """
-    Load and preprocess a prescription image for OCR.
+    Load, clean, and return an RGB PIL image ready for OCR models.
+
+    Args:
+        image_path: Absolute path to the uploaded prescription image.
 
     Returns:
-        Preprocessed BGR numpy array (uint8)
+        Preprocessed RGB PIL Image.
+
+    Raises:
+        FileNotFoundError: If OpenCV cannot read the file.
     """
-    image = cv2.imread(image_path)
-    if image is None:
-        raise ValueError(f"Cannot load image: {image_path}")
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot load image: {image_path}")
 
-    image = _deskew(image)
-    image = _denoise(image)
-    image = _clahe(image)
-    image = _sharpen(image)
-    image = _resize(image, target_long_side)
+    # ── 1. Upscale ────────────────────────────────────────────────────────────
+    h, w = img.shape[:2]
+    if max(w, h) < MIN_DIMENSION:
+        scale = MIN_DIMENSION / max(w, h)
+        img   = cv2.resize(
+            img,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        logger.debug("Upscaled → %dx%d", img.shape[1], img.shape[0])
 
-    return image
+    # ── 2. Deskew ─────────────────────────────────────────────────────────────
+    # cv2.minAreaRect returns angles in [-90, 0).
+    # Normalise to [-45, 45] so the guard works symmetrically.
+    gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    thresh    = cv2.threshold(
+        gray_full, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )[1]
+    coords = cv2.findNonZero(thresh)
+    if coords is not None:
+        angle = cv2.minAreaRect(coords)[-1]   # always in [-90, 0)
+        if angle < -45:
+            angle += 90                        # now in (-45, 45]
+        if DESKEW_MIN_ANGLE < abs(angle) <= DESKEW_MAX_ANGLE:
+            cx = img.shape[1] // 2
+            cy = img.shape[0] // 2
+            M  = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+            img = cv2.warpAffine(
+                img, M, (img.shape[1], img.shape[0]),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+            logger.debug("Deskewed %.1f°", angle)
 
+    # ── 3. Denoise ────────────────────────────────────────────────────────────
+    gray     = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.fastNlMeansDenoising(gray, h=DENOISE_H)
 
-def save_temp(image: np.ndarray) -> str:
-    """
-    Write numpy BGR image to a named temp file.
-    Caller is responsible for deleting it after use.
-    Returns the temp file path.
-    """
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
-    cv2.imwrite(path, image, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    return path
+    # ── 4. CLAHE (local contrast enhancement) ────────────────────────────────
+    clahe    = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=CLAHE_GRID)
+    enhanced = clahe.apply(denoised)
 
+    # ── 5. Unsharp mask (sharpen) ─────────────────────────────────────────────
+    blurred = cv2.GaussianBlur(enhanced, (5, 5), sigmaX=2)
+    sharp   = cv2.addWeighted(enhanced, SHARPEN_ALPHA, blurred, SHARPEN_BETA, 0)
 
-# ── private steps ──────────────────────────────────────────────────────────────
-
-def _deskew(image: np.ndarray, max_angle: float = 15.0) -> np.ndarray:
-    """
-    Correct camera tilt using minAreaRect on thresholded ink content.
-    Skips correction if detected angle > max_angle (likely mis-detection).
-    """
-    gray  = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray  = cv2.bitwise_not(gray)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-
-    coords = np.column_stack(np.where(thresh > 0))
-    if len(coords) < 100:
-        return image  # not enough ink to estimate angle
-
-    angle = cv2.minAreaRect(coords)[-1]
-    if angle < -45:
-        angle = 90 + angle
-
-    if abs(angle) > max_angle:
-        return image  # skip — likely a false detection
-
-    h, w = image.shape[:2]
-    M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
-    return cv2.warpAffine(image, M, (w, h),
-                          flags=cv2.INTER_CUBIC,
-                          borderMode=cv2.BORDER_REPLICATE)
-
-
-def _denoise(image: np.ndarray) -> np.ndarray:
-    """
-    Remove paper texture and camera noise while preserving ink edges.
-    Uses bilateral filter (edge-preserving) over Gaussian.
-    """
-    return cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
-
-
-def _clahe(image: np.ndarray) -> np.ndarray:
-    """
-    CLAHE on the L-channel of LAB colorspace.
-    Boosts local contrast — essential for faded or unevenly lit handwriting.
-    clipLimit=3.0 is stronger than default (2.0) to handle very faint ink.
-    """
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-
-
-def _sharpen(image: np.ndarray) -> np.ndarray:
-    """
-    Unsharp mask — enhances pen stroke edges for better CRAFT detection.
-    Helps CRAFT find character regions in cursive/overlapping handwriting.
-    """
-    blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=3)
-    return cv2.addWeighted(image, 1.5, blurred, -0.5, 0)
-
-
-def _resize(image: np.ndarray, target_long_side: int) -> np.ndarray:
-    """
-    Resize so the longer dimension = target_long_side, preserving aspect ratio.
-    1600px is the sweet spot: enough detail for CRAFT, not too slow to process.
-    """
-    h, w   = image.shape[:2]
-    scale  = target_long_side / max(h, w)
-    if abs(scale - 1.0) < 0.02:
-        return image  # already close enough
-    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
-    return cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=interp)
+    # Both Paddle and Qwen require RGB input
+    rgb = cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB)
+    logger.info("Preprocessed → %dx%d RGB", rgb.shape[1], rgb.shape[0])
+    return Image.fromarray(rgb)

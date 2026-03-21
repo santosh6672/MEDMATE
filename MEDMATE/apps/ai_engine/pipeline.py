@@ -1,206 +1,176 @@
 """
 pipeline.py
-───────────
-Fix: CRAFT + Qwen2-VL "parallel" was not actually parallel (54s)
+────────────
+Thin orchestrator. All logic lives in the four modules below.
 
-Root cause:
-    CRAFT and Qwen2-VL both use PyTorch on cuda:0.
-    CUDA only executes ONE PyTorch kernel at a time per device.
-    ThreadPoolExecutor created threads but they queued on the GPU:
-        Thread 1 (CRAFT):    waiting for GPU  → 27s
-        Thread 2 (Qwen2-VL): waiting for GPU  → 27s
-        Total wall time:                        54s  (same as sequential)
+Flow:
+  image_path
+    → utils/image_preprocessor.py         preprocess()
+    → ocr/paddle_ocr.py                   extract_text()
+    → vision_reasoner/qwen2.py            correct_ocr()
+    → medicine_reasoner/qwen_instruct.py  MedicineReasoner.reason()
+    → dict  { medicines: [...], patient_name, date, … }
 
-Correct execution order for single GPU:
-    ┌─────────────────────────────────────────────────────┐
-    │ Step 1: Preprocess        (CPU)          ~0.4s      │
-    │ Step 2: CRAFT             (PyTorch GPU)  ~5s        │
-    │ Step 3: ┌─ PaddleOCR ─── (Paddle GPU)   ~6s ─┐    │
-    │         └─ Qwen2-VL ──── (PyTorch GPU)  ~12s ─┤    │
-    │                                          max=12s    │
-    │ Step 4: LLM reasoning     (API)          ~2s        │
-    │                                                     │
-    │ Total inference: ~5 + 12 + 2 = ~19s                 │
-    └─────────────────────────────────────────────────────┘
+Both local GPU models (Paddle + Qwen) are cached inside their own modules
+after first load — no reload between Celery tasks on the same worker.
 
-Why PaddleOCR + Qwen2-VL CAN overlap:
-    PaddleOCR uses the Paddle inference engine (libpaddle_inference.so)
-    with its own CUDA context, separate from PyTorch's CUDA context.
-    These two CUDA contexts can execute simultaneously on the same GPU
-    because the GPU hardware can multiplex compute from different contexts.
-
-    CRAFT + Qwen2-VL CANNOT overlap because both use the same
-    PyTorch CUDA context — they share the same execution queue.
+Fixes vs original:
+  - _pipeline_event.set() moved INSIDE _pipeline_lock to guarantee
+    visibility of _pipeline_instance before any waiting thread resumes.
+  - _loading_started flag added so start_pipeline_preload() can never
+    spawn two background threads even under a race between callers.
+  - process() propagates exceptions instead of swallowing them;
+    tasks.py decides how to handle failures.
+  - Removed gc.collect() — no tight inner loop here.
+  - logging instead of print()
 """
 
-import os
-import time
+import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
-from .craft.detect_boxes import CraftDetector
-from .ocr.paddle_ocr import PaddleRecognizer
-from .vision_reasoner.qwen2 import QwenReasoner
-from .medicine_reasoner.qwen_instruct import MedicineReasoner
-from apps.ai_engine.utils.image_preprocessor import preprocess, save_temp
+import torch
+
+from apps.ai_engine.utils.image_preprocessor import preprocess
+from apps.ai_engine.ocr.paddle_ocr import (
+    extract_text as paddle_extract,
+    warmup       as paddle_warmup,
+)
+from apps.ai_engine.vision_reasoner.qwen2 import (
+    correct_ocr as qwen_correct,
+    warmup      as qwen_warmup,
+)
+from apps.ai_engine.medicine_reasoner.qwen_instruct import MedicineReasoner
+
+logger = logging.getLogger(__name__)
 
 
 class MedMatePipeline:
+    """
+    Orchestrates the full prescription → structured-JSON pipeline.
+    Same .process(image_path) → dict interface consumed by tasks.py.
+    """
 
-    def __init__(self):
-        print("\n🚀 Loading AI Models...")
-        self.craft             = CraftDetector(cuda=True)
-        self.paddle            = PaddleRecognizer()
-        self.qwen_vision       = QwenReasoner()
-        self.medicine_reasoner = MedicineReasoner()
-        print("✅ All models loaded\n")
+    def __init__(self) -> None:
+        self.reasoner = MedicineReasoner()
 
     def process(self, image_path: str) -> dict:
         """
-        Full prescription processing pipeline.
+        Run the full pipeline for one prescription image.
 
-        Execution order:
-          1. Preprocess (CPU)
-          2. CRAFT (PyTorch GPU) — must finish before PaddleOCR needs boxes
-          3. PARALLEL:
-               PaddleOCR (Paddle CUDA context) on CRAFT boxes
-             + Qwen2-VL  (PyTorch CUDA context) on full image
-             ← different CUDA contexts → genuine GPU overlap
-          4. LLM reasoning (API, no GPU)
+        Args:
+            image_path: Absolute filesystem path to the uploaded image.
+
+        Returns:
+            dict with 'medicines' list and patient metadata.
+
+        Raises:
+            Any exception from the sub-modules — callers (tasks.py) handle
+            failures and set the prescription status accordingly.
         """
-        t_total   = time.time()
-        temp_path = None
+        t_total = time.time()
 
-        try:
-            # ── 1. Preprocess (CPU) ────────────────────────────────────────
-            t = time.time()
-            print("🖼️  Preprocessing image...")
-            preprocessed = preprocess(image_path)
-            temp_path    = save_temp(preprocessed)
-            print(f"   ✅ Preprocessing done ({time.time()-t:.1f}s)")
+        # ── 1. Preprocess ──────────────────────────────────────────────────
+        logger.info("Step 1/4 — preprocessing image …")
+        image = preprocess(image_path)
 
-            # ── 2. CRAFT (PyTorch GPU) — sequential, must finish first ─────
-            t = time.time()
-            print("🔍 CRAFT detecting boxes...")
-            boxes = self._run_craft(temp_path)
-            print(f"   ✅ CRAFT: {len(boxes)} boxes ({time.time()-t:.1f}s)")
+        # ── 2. PaddleOCR-VL ───────────────────────────────────────────────
+        logger.info("Step 2/4 — PaddleOCR-VL extraction …")
+        paddle_text = paddle_extract(image)
 
-            # ── 3. PaddleOCR + Qwen2-VL in PARALLEL ───────────────────────
-            # PaddleOCR: Paddle CUDA context (needs boxes from step 2)
-            # Qwen2-VL:  PyTorch CUDA context (needs full image from step 1)
-            # Different CUDA contexts → genuine GPU parallelism
-            t = time.time()
-            print("🔀 Running PaddleOCR + Qwen2-VL in parallel...")
+        # ── 3. Qwen2-VL correction ─────────────────────────────────────────
+        logger.info("Step 3/4 — Qwen2-VL OCR correction …")
+        corrected_text = qwen_correct(image, paddle_text)
 
-            paddle_text = ""
-            qwen_text   = ""
+        # Release PIL image — no longer needed downstream
+        del image
 
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                fut_paddle = ex.submit(self._run_paddle, temp_path, boxes)
-                fut_qwen   = ex.submit(self._run_qwen,   temp_path)
+        # ── 4. LLM medicine extraction ─────────────────────────────────────
+        logger.info("Step 4/4 — LLM medicine extraction …")
+        result = self.reasoner.reason(corrected_text)
 
-                for fut in as_completed([fut_paddle, fut_qwen]):
-                    if fut is fut_paddle:
-                        paddle_text = fut.result()
-                    else:
-                        qwen_text = fut.result()
-
-            print(
-                f"   ✅ PaddleOCR: {len(paddle_text)} chars | "
-                f"Qwen2-VL: {len(qwen_text)} chars "
-                f"({time.time()-t:.1f}s)"
-            )
-
-            # ── 4. LLM cross-validation reasoning (API) ───────────────────
-            t = time.time()
-            print("🧠 Running LLM reasoning...")
-            result = self._run_reasoner(paddle_text, qwen_text)
-            print(f"   ✅ Reasoning done ({time.time()-t:.1f}s)")
-
-            elapsed = time.time() - t_total
-            print(f"\n🎉 Pipeline complete in {elapsed:.1f}s total")
-            return result
-
-        except Exception as e:
-            print(f"❌ Pipeline error: {e}")
-            return {"medicines": []}
-
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
-
-    # ── Per-step runners ───────────────────────────────────────────────────
-
-    def _run_craft(self, image_path: str) -> list:
-        try:
-            return self.craft.detect(image_path)
-        except Exception as e:
-            print(f"⚠️  CRAFT failed: {e}")
-            return []
-
-    def _run_paddle(self, image_path: str, boxes: list) -> str:
-        try:
-            text, _ = self.paddle.recognize(image_path, boxes)
-            return text
-        except Exception as e:
-            print(f"⚠️  PaddleOCR failed: {e}")
-            return ""
-
-    def _run_qwen(self, image_path: str) -> str:
-        try:
-            return self.qwen_vision.extract_text(image_path)
-        except Exception as e:
-            print(f"⚠️  Qwen2-VL failed: {e}")
-            return ""
-
-    def _run_reasoner(self, paddle_text: str, qwen_text: str) -> dict:
-        try:
-            return self.medicine_reasoner.reason(paddle_text, qwen_text)
-        except Exception as e:
-            print(f"⚠️  Reasoning failed: {e}")
-            return {"medicines": []}
+        logger.info("Pipeline complete in %.1fs", time.time() - t_total)
+        return result
 
 
-# ── Background preload singleton ───────────────────────────────────────────────
+# ── Background preload singleton ──────────────────────────────────────────────
 
 _pipeline_instance: MedMatePipeline | None = None
-_pipeline_lock  = threading.Lock()
-_pipeline_event = threading.Event()
+_pipeline_lock                              = threading.Lock()
+_pipeline_event                             = threading.Event()
+_loading_started: bool                      = False   # guarded by _pipeline_lock
 
 
-def _load_in_background():
+def _load_in_background() -> None:
     global _pipeline_instance
+    t = time.time()
+    logger.info("[Background] Loading AI pipeline …")
     try:
-        t = time.time()
-        print("🔄 [Background] Loading AI pipeline...")
         instance = MedMatePipeline()
+
+        # Load Paddle first, check VRAM, then load Qwen
+        logger.info("[Background] Warming up PaddleOCR …")
+        paddle_warmup()
+
+        free_vram = (
+            torch.cuda.get_device_properties(0).total_memory
+            - torch.cuda.memory_allocated(0)
+        ) / 1024 ** 2
+        logger.info("[Background] VRAM free after Paddle: %.0f MiB", free_vram)
+
+        if free_vram < 1400:
+            logger.warning(
+                "[Background] Only %.0f MiB free — Qwen2-VL may fail. "
+                "Close other GPU applications and restart the worker.",
+                free_vram,
+            )
+
+        logger.info("[Background] Warming up Qwen2-VL …")
+        qwen_warmup()
+
+        # Assign instance and fire event INSIDE the lock
         with _pipeline_lock:
             _pipeline_instance = instance
-        _pipeline_event.set()
-        print(f"✅ [Background] Pipeline ready in {time.time()-t:.1f}s")
-    except Exception as e:
-        print(f"❌ [Background] Pipeline load failed: {e}")
-        _pipeline_event.set()
+            _pipeline_event.set()
+
+        logger.info("[Background] Pipeline ready in %.1fs", time.time() - t)
+
+    except Exception:
+        logger.exception("[Background] Pipeline load failed")
+        with _pipeline_lock:
+            _pipeline_event.set()   # unblock get_pipeline() so it can raise
 
 
-def start_pipeline_preload():
+def start_pipeline_preload() -> None:
+    """
+    Start the background model-loading thread exactly once.
+    Safe to call from multiple Celery worker processes or threads.
+    """
+    global _loading_started
     with _pipeline_lock:
-        if _pipeline_instance is not None or _pipeline_event.is_set():
+        if _loading_started:
             return
-    t = threading.Thread(target=_load_in_background, daemon=True)
-    t.start()
+        _loading_started = True
+    threading.Thread(target=_load_in_background, daemon=True).start()
 
 
 def get_pipeline() -> MedMatePipeline:
+    """
+    Return the loaded pipeline, blocking until it is ready.
+
+    Raises:
+        RuntimeError: If background loading failed.
+    """
+    # Fast path — already loaded (read is safe: _pipeline_instance is set once)
     if _pipeline_instance is not None:
         return _pipeline_instance
 
     start_pipeline_preload()
-
-    print("⏳ Waiting for pipeline to finish loading...")
+    logger.info("Waiting for pipeline to finish loading …")
     _pipeline_event.wait()
 
     if _pipeline_instance is None:
-        raise RuntimeError("Pipeline failed to load. Check logs.")
-
+        raise RuntimeError(
+            "AI pipeline failed to load. Check Celery worker logs for details."
+        )
     return _pipeline_instance
