@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../constants.dart';
 import '../services/reminder_storage.dart';
 import '../widgets/common_widgets.dart';
@@ -15,247 +16,308 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  List<Map<String, dynamic>> allMedicines = [];
-  bool isLoading = true;
+  List<Map<String, dynamic>> _allMedicines = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    loadTodaySchedule();
+    _init();
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    loadTodaySchedule();
+  Future<void> _init() async {
+    await _checkDailyReset();
+    await _loadSchedule();
   }
 
-  Future<void> loadTodaySchedule() async {
-    List<Map<String, dynamic>> meds = await ReminderStorage.loadReminders();
+  Future<void> _checkDailyReset() async {
+    final last = await ReminderStorage.getLastResetDate();
+    final now = DateTime.now();
+    final today = '${now.year}-${now.month}-${now.day}';
+
+    if (last != today) {
+      await ReminderStorage.resetTakenStatus();
+      await ReminderStorage.setLastResetDate(today);
+    }
+  }
+
+  Future<void> _loadSchedule() async {
+    final data = await ReminderStorage.loadReminders();
+
+    if (!mounted) return;
+
     setState(() {
-      allMedicines = meds;
-      isLoading = false;
+      _allMedicines = data;
+      _isLoading = false;
     });
   }
 
-  Future<void> markDoseTaken(int originalIndex) async {
-    await ReminderStorage.markAsTaken(originalIndex);
-    await loadTodaySchedule();
+  Future<void> _markTaken(int index) async {
+    await ReminderStorage.markAsTaken(index);
+    await _loadSchedule();
   }
 
-  String formatTime(int hour, int minute) {
-    final h = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
-    final m = minute.toString().padLeft(2, '0');
-    final period = hour >= 12 ? "PM" : "AM";
-    return "$h:$m $period";
+  int get _total => _allMedicines.length;
+  int get _taken =>
+      _allMedicines.where((e) => e['taken'] == true).length;
+
+  double get _progress =>
+      _total == 0 ? 0 : _taken / _total;
+
+  String get _greeting {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good Morning';
+    if (h < 17) return 'Good Afternoon';
+    if (h < 21) return 'Good Evening';
+    return 'Good Night';
   }
 
-  // ── Group flat dose list into one entry per medicine name ─────────────────
-  List<Map<String, dynamic>> get groupedMedicines {
-    final Map<String, Map<String, dynamic>> groups = {};
-
-    for (int i = 0; i < allMedicines.length; i++) {
-      final med  = allMedicines[i];
-      final name = med["name"] ?? "Unknown";
-
-      if (!groups.containsKey(name)) {
-        groups[name] = {
-          "name":    name,
-          "dosage":  med["dosage"]  ?? "—",
-          "foodTag": med["foodTag"] ?? "No preference",
-          "doses":   <Map<String, dynamic>>[],
-        };
-      }
-
-      (groups[name]!["doses"] as List).add({
-        "hour":        med["hour"]        ?? 0,
-        "minute":      med["minute"]      ?? 0,
-        "doseNumber":  med["doseNumber"]  ?? 1,
-        "dosesPerDay": med["dosesPerDay"] ?? 1,
-        "taken":       med["taken"]       == true,
-        "beforeBed":   med["beforeBed"]   == true,
-        "originalIndex": i,
-      });
-    }
-
-    for (final g in groups.values) {
-      (g["doses"] as List).sort((a, b) =>
-          (a["hour"] * 60 + a["minute"])
-              .compareTo(b["hour"] * 60 + b["minute"]));
-      final doses  = g["doses"] as List;
-      g["allTaken"] = doses.every((d) => d["taken"] == true);
-      g["anyTaken"] = doses.any((d)  => d["taken"] == true);
-    }
-
-    return groups.values.toList();
+  String _format(int h, int m) {
+    final hh = h > 12 ? h - 12 : (h == 0 ? 12 : h);
+    final mm = m.toString().padLeft(2, '0');
+    return '$hh:$mm ${h >= 12 ? 'PM' : 'AM'}';
   }
-
-  List<Map<String, dynamic>> get upcomingGroups =>
-      groupedMedicines.where((g) => g["allTaken"] != true).toList();
-
-  List<Map<String, dynamic>> get takenGroups =>
-      groupedMedicines.where((g) => g["allTaken"] == true).toList();
-
-  int get totalDoses     => allMedicines.length;
-  int get takenDoses     => allMedicines.where((m) => m["taken"] == true).length;
-  int get remainingDoses => totalDoses - takenDoses;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: kBg,
       appBar: AppBar(
-        title: const Text("MedMate"),
+        title: const Text('MedMate'),
         backgroundColor: kPrimary,
         foregroundColor: kWhite,
-        automaticallyImplyLeading: false,
+        elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
+            icon: const Icon(Icons.person_outline),
             onPressed: () async {
-              await Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()));
-              loadTodaySchedule();
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ProfileScreen(),
+                ),
+              );
+              _loadSchedule();
             },
           ),
         ],
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator(color: kPrimary))
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: kPrimary),
+            )
           : RefreshIndicator(
-              onRefresh: loadTodaySchedule,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
+              onRefresh: _loadSchedule,
+              child: ListView(
                 padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+                children: [
 
-                    // ── Greeting card ──────────────────────────────────────
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                          color: kPrimary,
-                          borderRadius: BorderRadius.circular(16)),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text("Good Morning! 🌿",
-                              style: TextStyle(color: Colors.white70, fontSize: 14)),
-                          const SizedBox(height: 4),
-                          const Text("Stay healthy today!",
-                              style: TextStyle(color: kWhite, fontSize: 20,
-                                  fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 16),
-                          Row(children: [
-                            StatBox(label: "Total",     value: "$totalDoses",     icon: Icons.medication),
-                            const SizedBox(width: 10),
-                            StatBox(label: "Taken",     value: "$takenDoses",     icon: Icons.check_circle_outline),
-                            const SizedBox(width: 10),
-                            StatBox(label: "Remaining", value: "$remainingDoses", icon: Icons.pending_outlined),
-                          ]),
-                        ],
+                  // 🔥 HERO CARD
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [kPrimary, kPrimary.withBlue(180)],
                       ),
+                      borderRadius: BorderRadius.circular(20),
                     ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _greeting,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Stay consistent today 💊',
+                          style: TextStyle(
+                            color: kWhite,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
 
-                    const SizedBox(height: 24),
+                        // Progress
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: LinearProgressIndicator(
+                            value: _progress,
+                            minHeight: 6,
+                            backgroundColor:
+                                Colors.white.withOpacity(0.2),
+                            valueColor:
+                                const AlwaysStoppedAnimation(kWhite),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
 
-                    // ── Quick Actions ──────────────────────────────────────
-                    const Text("Quick Actions",
-                        style: TextStyle(fontSize: 18,
-                            fontWeight: FontWeight.bold, color: kTextDark)),
-                    const SizedBox(height: 14),
+                        Text(
+                          '$_taken / $_total completed',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
-                    Row(children: [
+                  const SizedBox(height: 24),
+
+                  // ⚡ QUICK ACTIONS
+                  const Text(
+                    'Quick Actions',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  Row(
+                    children: [
                       Expanded(
                         child: DashCard(
-                          icon: Icons.document_scanner,
-                          label: "Scan\nPrescription",
+                          icon: Icons.camera_alt_outlined,
+                          label: 'Scan',
                           color: kPrimary,
                           onTap: () async {
-                            await Navigator.push(context,
-                                MaterialPageRoute(
-                                    builder: (_) => const UploadScreen()));
-                            loadTodaySchedule();
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const UploadScreen(),
+                              ),
+                            );
+                            _loadSchedule();
                           },
                         ),
                       ),
-                      const SizedBox(width: 14),
+                      const SizedBox(width: 12),
                       Expanded(
                         child: DashCard(
                           icon: Icons.history,
-                          label: "My\nPrescriptions",
+                          label: 'History',
                           color: kAccent,
-                          onTap: () => Navigator.push(context,
-                              MaterialPageRoute(
-                                  builder: (_) =>
-                                      const PrescriptionsListScreen())),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const PrescriptionsListScreen(),
+                            ),
+                          ),
                         ),
                       ),
-                    ]),
+                    ],
+                  ),
 
-                    const SizedBox(height: 28),
+                  const SizedBox(height: 24),
 
-                    // ── Today's Schedule ───────────────────────────────────
-                    const Text("Today's Schedule",
-                        style: TextStyle(fontSize: 18,
-                            fontWeight: FontWeight.bold, color: kTextDark)),
-                    const SizedBox(height: 14),
+                  // 📋 SCHEDULE
+                  const Text(
+                    "Today's Schedule",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
 
-                    // Empty state
-                    if (allMedicines.isEmpty)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                            color: kWhite,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.grey.shade200)),
-                        child: const Column(children: [
-                          Icon(Icons.medication_outlined,
-                              size: 48, color: kTextGrey),
-                          SizedBox(height: 10),
-                          Text("No medicines scheduled yet.",
-                              style: TextStyle(color: kTextGrey, fontSize: 15)),
-                          SizedBox(height: 4),
-                          Text("Scan a prescription to get started.",
-                              style: TextStyle(color: kTextGrey, fontSize: 13)),
-                        ]),
+                  if (_allMedicines.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(30),
+                      decoration: BoxDecoration(
+                        color: kWhite,
+                        borderRadius: BorderRadius.circular(16),
                       ),
+                      child: const Center(
+                        child: Text(
+                          'No reminders yet',
+                          style: TextStyle(color: kTextGrey),
+                        ),
+                      ),
+                    ),
 
-                    // ── Upcoming ───────────────────────────────────────────
-                    if (upcomingGroups.isNotEmpty) ...[
-                      SectionLabel(
-                          label: "⏰  Upcoming",
-                          color: kPrimary,
-                          count: upcomingGroups.length),
-                      const SizedBox(height: 10),
-                      ...upcomingGroups.map((group) => GroupedScheduleCard(
-                            group: group,
-                            formatTime: formatTime,
-                            onMarkTaken: (originalIndex) =>
-                                markDoseTaken(originalIndex),
-                          )),
-                      const SizedBox(height: 20),
-                    ],
+                  ..._allMedicines.asMap().entries.map((e) {
+                    final i = e.key;
+                    final m = e.value;
 
-                    // ── All taken ──────────────────────────────────────────
-                    if (takenGroups.isNotEmpty) ...[
-                      SectionLabel(
-                          label: "✅  Taken Today",
-                          color: kAccent,
-                          count: takenGroups.length),
-                      const SizedBox(height: 10),
-                      ...takenGroups.map((group) => GroupedScheduleCard(
-                            group: group,
-                            formatTime: formatTime,
-                            onMarkTaken: null,
-                          )),
-                    ],
+                    final taken = m['taken'] == true;
 
-                    const SizedBox(height: 20),
-                  ],
-                ),
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: kWhite,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: taken
+                              ? kAccent.withOpacity(0.3)
+                              : Colors.grey.shade200,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            taken
+                                ? Icons.check_circle
+                                : Icons.access_time,
+                            color: taken ? kAccent : kPrimary,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  m['name'] ?? 'Medicine',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  _format(
+                                    m['hour'],
+                                    m['minute'],
+                                  ),
+                                  style: const TextStyle(
+                                    color: kTextGrey,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (!taken)
+                            GestureDetector(
+                              onTap: () => _markTaken(i),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  borderRadius:
+                                      BorderRadius.circular(20),
+                                  border: Border.all(color: kPrimary),
+                                ),
+                                child: const Text(
+                                  'Taken',
+                                  style: TextStyle(
+                                    color: kPrimary,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
               ),
             ),
     );

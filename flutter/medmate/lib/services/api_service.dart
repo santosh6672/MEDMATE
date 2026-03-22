@@ -1,112 +1,142 @@
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../constants.dart';
 
-// ─────────────────────────────────────────────
-// API SERVICE
-// All 9 Django URLs used in this app:
-//
-//  1. POST  /api/users/register/
-//  2. POST  /api/users/login/
-//  3. GET   /api/users/profile/
-//  4. POST  /api/users/change-password/
-//  5. POST  /api/users/logout/
-//  6. POST  /api/users/token/refresh/   ← auto called on 401
-//  7. POST  /api/prescriptions/upload/
-//  8. GET   /api/prescriptions/
-//  9. GET   /api/prescriptions/<pk>/
-// ─────────────────────────────────────────────
 class ApiService {
+  ApiService._();
 
-  // Save both tokens after login / register
+  static const String _keyAccess  = 'access';
+  static const String _keyRefresh = 'refresh';
+
+  static const Map<String, String> _baseHeaders = {
+    'Content-Type':              'application/json',
+    'ngrok-skip-browser-warning': 'true',
+  };
+
+  // ── Token storage ──────────────────────────────────────────────────────────
+
   static Future<void> saveTokens(String access, String refresh) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setString("access", access);
-    await prefs.setString("refresh", refresh);
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setString(_keyAccess,  access),
+      prefs.setString(_keyRefresh, refresh),
+    ]);
   }
 
-  // Read access token from device storage
   static Future<String?> getAccessToken() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    return prefs.getString("access");
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyAccess);
   }
 
-  // Clear both tokens on logout
+  static Future<String?> getRefreshToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyRefresh);
+  }
+
   static Future<void> clearTokens() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.remove("access");
-    await prefs.remove("refresh");
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.remove(_keyAccess),
+      prefs.remove(_keyRefresh),
+    ]);
   }
 
-  // ── URL 6: POST /api/users/token/refresh/ ──
-  // Called automatically when any request returns 401.
-  // Gets a new access token using the saved refresh token.
+  // ── Headers ────────────────────────────────────────────────────────────────
+
+  static Future<Map<String, String>> _authHeaders({
+    bool includeContentType = false,
+  }) async {
+    final token = await getAccessToken();
+    return {
+      ..._baseHeaders,
+      if (!includeContentType) ...{'Content-Type': ''},
+      if (token != null && token.isNotEmpty)
+        'Authorization': 'Bearer $token',
+    }..removeWhere((_, v) => v.isEmpty);
+  }
+
+  // ── Token refresh ──────────────────────────────────────────────────────────
+
   static Future<bool> refreshToken() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    String? refresh = prefs.getString("refresh");
-    if (refresh == null) return false;
+    final refresh = await getRefreshToken();
+    if (refresh == null || refresh.isEmpty) return false;
 
     try {
-      final response = await http.post(
-        Uri.parse("$kBaseUrl/api/users/token/refresh/"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"refresh": refresh}),
-      );
+      final response = await http
+          .post(
+            Uri.parse('$kBaseUrl/api/users/token/refresh/'),
+            headers: _baseHeaders,
+            body: jsonEncode({'refresh': refresh}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        await prefs.setString("access", data["access"]);
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final newAccess = data['access'] as String?;
+        if (newAccess == null || newAccess.isEmpty) return false;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_keyAccess, newAccess);
         return true;
       }
-    } catch (_) {}
+    } on SocketException {
+      return false;
+    } on http.ClientException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+
     return false;
   }
 
-  // Build Authorization header from saved token
-  static Future<Map<String, String>> authHeader() async {
-    String? token = await getAccessToken();
-    return {"Authorization": "Bearer $token"};
-  }
+  // ── GET with auth + auto-refresh ───────────────────────────────────────────
 
-  // GET with auto token refresh on 401
   static Future<http.Response> getWithAuth(String url) async {
-    var headers = await authHeader();
-    var response = await http.get(Uri.parse(url), headers: headers);
+    var headers  = await _authHeaders();
+    var response = await http
+        .get(Uri.parse(url), headers: headers)
+        .timeout(const Duration(seconds: 30));
 
-    if (response.statusCode == 401) {
-      bool refreshed = await refreshToken();
-      if (refreshed) {
-        headers = await authHeader();
-        response = await http.get(Uri.parse(url), headers: headers);
-      }
+    if (response.statusCode == 401 && await refreshToken()) {
+      headers  = await _authHeaders();
+      response = await http
+          .get(Uri.parse(url), headers: headers)
+          .timeout(const Duration(seconds: 30));
     }
+
     return response;
   }
 
-  // POST with auto token refresh on 401
+  // ── POST with auth + auto-refresh ──────────────────────────────────────────
+
   static Future<http.Response> postWithAuth(
-      String url, Map<String, dynamic> body) async {
-    var headers = await authHeader();
-    headers["Content-Type"] = "application/json";
-
-    var response = await http.post(
-      Uri.parse(url),
-      headers: headers,
-      body: jsonEncode(body),
-    );
-
-    if (response.statusCode == 401) {
-      bool refreshed = await refreshToken();
-      if (refreshed) {
-        headers = await authHeader();
-        response = await http.post(
+    String url,
+    Map<String, dynamic> body,
+  ) async {
+    var headers  = await _authHeaders(includeContentType: true);
+    var response = await http
+        .post(
           Uri.parse(url),
           headers: headers,
           body: jsonEncode(body),
-        );
-      }
+        )
+        .timeout(const Duration(seconds: 30));
+
+    if (response.statusCode == 401 && await refreshToken()) {
+      headers  = await _authHeaders(includeContentType: true);
+      response = await http
+          .post(
+            Uri.parse(url),
+            headers: headers,
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 30));
     }
+
     return response;
   }
 }

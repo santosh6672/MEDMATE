@@ -58,12 +58,12 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('password2')
-        # Create user but mark as inactive until email is verified
+        # Create user and mark as active immediately
         user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data['email'],
             password=validated_data['password'],
-            is_active=False,   # ← blocked until OTP verified
+            is_active=True,
         )
         return user
 
@@ -104,9 +104,36 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 # ===============================
-# 4. OTP Verify Serializer
+# 5. Email Login Serializer
 # ===============================
 
-class OTPVerifySerializer(serializers.Serializer):
-    email = serializers.EmailField(required=True)
-    otp   = serializers.CharField(required=True, min_length=6, max_length=6)
+class EmailLoginSerializer(serializers.Serializer):
+    email    = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
+
+    def validate(self, attrs):
+        email    = attrs.get("email").strip().lower()
+        password = attrs.get("password")
+
+        # Find user by email
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            raise serializers.ValidationError(
+                {"email": "No account found with this email."}
+            )
+
+        # Check account is active (OTP verified)
+        if not user.is_active:
+            raise serializers.ValidationError(
+                {"email": "Account not verified. Please verify your email first."}
+            )
+
+        # Check password
+        if not user.check_password(password):
+            raise serializers.ValidationError(
+                {"password": "Incorrect password."}
+            )
+
+        attrs["user"] = user
+        return attrs

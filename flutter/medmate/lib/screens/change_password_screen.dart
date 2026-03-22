@@ -1,147 +1,296 @@
 import 'package:flutter/material.dart';
+
 import '../constants.dart';
 import '../services/api_service.dart';
 import '../widgets/common_widgets.dart';
-
-// URL: POST /api/users/change-password/
-// Body: { "old_password", "new_password" }
 
 class ChangePasswordScreen extends StatefulWidget {
   const ChangePasswordScreen({super.key});
 
   @override
-  State<ChangePasswordScreen> createState() => _ChangePasswordScreenState();
+  State<ChangePasswordScreen> createState() =>
+      _ChangePasswordScreenState();
 }
 
-class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
-  final oldPasswordController     = TextEditingController();
-  final newPasswordController     = TextEditingController();
-  final confirmPasswordController = TextEditingController();
+class _ChangePasswordScreenState
+    extends State<ChangePasswordScreen> {
+  final _oldCtrl     = TextEditingController();
+  final _newCtrl     = TextEditingController();
+  final _confirmCtrl = TextEditingController();
 
-  bool isLoading = false;
-  String errorMessage = "";
-  String successMessage = "";
+  bool _isLoading   = false;
+  bool _showOld     = false;
+  bool _showNew     = false;
+  bool _showConfirm = false;
 
-  Future<void> changePassword() async {
-    if (oldPasswordController.text.isEmpty ||
-        newPasswordController.text.isEmpty ||
-        confirmPasswordController.text.isEmpty) {
-      setState(() => errorMessage = "Please fill in all fields.");
-      return;
-    }
-    if (newPasswordController.text != confirmPasswordController.text) {
-      setState(() => errorMessage = "New passwords do not match.");
-      return;
-    }
+  String _errorMessage   = '';
+  String _successMessage = '';
 
-    setState(() { isLoading = true; errorMessage = ""; successMessage = ""; });
-
-    try {
-      final response = await ApiService.postWithAuth(
-        "$kBaseUrl/api/users/change-password/",
-        {"old_password": oldPasswordController.text, "new_password": newPasswordController.text},
-      );
-
-      if (response.statusCode == 200) {
-        setState(() => successMessage = "Password changed successfully!");
-        oldPasswordController.clear();
-        newPasswordController.clear();
-        confirmPasswordController.clear();
-      } else if (response.statusCode == 400) {
-        setState(() => errorMessage = "Old password is incorrect.");
-      } else {
-        setState(() => errorMessage = "Failed. Please try again.");
-      }
-    } catch (_) {
-      setState(() => errorMessage = "Cannot connect to server.");
-    } finally {
-      setState(() => isLoading = false);
-    }
-  }
+  bool get _validLength => _newCtrl.text.length >= 8;
+  bool get _match =>
+      _newCtrl.text == _confirmCtrl.text &&
+      _confirmCtrl.text.isNotEmpty;
 
   @override
   void dispose() {
-    oldPasswordController.dispose();
-    newPasswordController.dispose();
-    confirmPasswordController.dispose();
+    _oldCtrl.dispose();
+    _newCtrl.dispose();
+    _confirmCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _changePassword() async {
+    if (_oldCtrl.text.isEmpty ||
+        _newCtrl.text.isEmpty ||
+        _confirmCtrl.text.isEmpty) {
+      _setError('Please fill in all fields.');
+      return;
+    }
+
+    if (!_validLength) {
+      _setError('Password must be at least 8 characters.');
+      return;
+    }
+
+    if (!_match) {
+      _setError('Passwords do not match.');
+      return;
+    }
+
+    if (_isLoading) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+      _successMessage = '';
+    });
+
+    try {
+      final response = await ApiService.postWithAuth(
+        '$kBaseUrl/api/users/change-password/',
+        {
+          'old_password': _oldCtrl.text,
+          'new_password': _newCtrl.text,
+        },
+      );
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _successMessage = 'Password updated successfully';
+        });
+
+        _oldCtrl.clear();
+        _newCtrl.clear();
+        _confirmCtrl.clear();
+
+        await Future.delayed(const Duration(seconds: 1));
+
+        if (mounted) Navigator.pop(context);
+      } else if (response.statusCode == 400) {
+        _setError('Current password is incorrect.');
+      } else {
+        _setError('Failed (${response.statusCode}).');
+      }
+    } catch (_) {
+      _setError('Cannot connect to server.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _setError(String message) {
+    if (!mounted) return;
+    setState(() {
+      _errorMessage = message;
+      _isLoading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Change Password"),
-          backgroundColor: kPrimary, foregroundColor: kWhite),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 10),
-            const Text("Change Password 🔒",
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: kTextDark)),
-            const SizedBox(height: 6),
-            const Text("Enter your old and new password",
-                style: TextStyle(fontSize: 15, color: kTextGrey)),
-            const SizedBox(height: 30),
+      backgroundColor: kBg,
+      appBar: AppBar(
+        title: const Text('Change Password'),
+        backgroundColor: kPrimary,
+        foregroundColor: kWhite,
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
 
-            const Text("Current Password", style: TextStyle(fontWeight: FontWeight.w600, color: kTextDark)),
-            const SizedBox(height: 6),
-            TextField(controller: oldPasswordController, obscureText: true,
-                decoration: inputDecoration("Enter current password", Icons.lock_outline)),
-
-            const SizedBox(height: 18),
-            const Text("New Password", style: TextStyle(fontWeight: FontWeight.w600, color: kTextDark)),
-            const SizedBox(height: 6),
-            TextField(controller: newPasswordController, obscureText: true,
-                decoration: inputDecoration("Enter new password", Icons.lock_open)),
-
-            const SizedBox(height: 18),
-            const Text("Confirm New Password", style: TextStyle(fontWeight: FontWeight.w600, color: kTextDark)),
-            const SizedBox(height: 6),
-            TextField(controller: confirmPasswordController, obscureText: true,
-                decoration: inputDecoration("Re-enter new password", Icons.lock_open)),
-
-            const SizedBox(height: 28),
-
-            SizedBox(
-              width: double.infinity, height: 52,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: kPrimary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                onPressed: isLoading ? null : changePassword,
-                child: isLoading
-                    ? const CircularProgressIndicator(color: kWhite)
-                    : const Text("Update Password", style: TextStyle(fontSize: 17, color: kWhite)),
-              ),
-            ),
-
-            if (errorMessage.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              ErrorBanner(message: errorMessage),
-            ],
-
-            if (successMessage.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: kAccent.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: kAccent.withOpacity(0.4)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle_outline, color: kAccent, size: 18),
-                    const SizedBox(width: 8),
-                    Text(successMessage, style: const TextStyle(color: kAccent, fontSize: 14)),
-                  ],
+              TextField(
+                controller: _oldCtrl,
+                obscureText: !_showOld,
+                decoration: inputDecoration(
+                  'Current Password',
+                  Icons.lock_outline,
+                ).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _showOld
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: kTextGrey,
+                    ),
+                    onPressed: () =>
+                        setState(() => _showOld = !_showOld),
+                  ),
                 ),
               ),
+
+              const SizedBox(height: 16),
+
+              TextField(
+                controller: _newCtrl,
+                obscureText: !_showNew,
+                onChanged: (_) => setState(() {}),
+                decoration: inputDecoration(
+                  'New Password',
+                  Icons.lock_outline,
+                ).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _showNew
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: kTextGrey,
+                    ),
+                    onPressed: () =>
+                        setState(() => _showNew = !_showNew),
+                  ),
+                ),
+              ),
+
+              if (_newCtrl.text.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                _ValidationRow(
+                  ok: _validLength,
+                  label: 'At least 8 characters',
+                ),
+              ],
+
+              const SizedBox(height: 16),
+
+              TextField(
+                controller: _confirmCtrl,
+                obscureText: !_showConfirm,
+                onChanged: (_) => setState(() {}),
+                decoration: inputDecoration(
+                  'Confirm Password',
+                  Icons.lock_outline,
+                ).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _showConfirm
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: kTextGrey,
+                    ),
+                    onPressed: () => setState(
+                      () => _showConfirm = !_showConfirm,
+                    ),
+                  ),
+                ),
+              ),
+
+              if (_confirmCtrl.text.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                _ValidationRow(
+                  ok: _match,
+                  label: _match
+                      ? 'Passwords match'
+                      : 'Passwords do not match',
+                ),
+              ],
+
+              const SizedBox(height: 24),
+
+              if (_errorMessage.isNotEmpty) ...[
+                ErrorBanner(message: _errorMessage),
+                const SizedBox(height: 12),
+              ],
+
+              if (_successMessage.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: kAccent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: kAccent.withOpacity(0.4),
+                    ),
+                  ),
+                  child: Row(
+                    children: const [
+                      Icon(Icons.check_circle, color: kAccent),
+                      SizedBox(width: 8),
+                      Text(
+                        'Success',
+                        style: TextStyle(color: kAccent),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              SizedBox(
+                height: 52,
+                child: FilledButton(
+                  onPressed: _isLoading ? null : _changePassword,
+                  child: _isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: kWhite,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text('Update Password'),
+                ),
+              ),
             ],
-          ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _ValidationRow extends StatelessWidget {
+  final bool ok;
+  final String label;
+
+  const _ValidationRow({
+    required this.ok,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          ok ? Icons.check_circle : Icons.cancel,
+          size: 14,
+          color: ok ? kAccent : kRed,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: ok ? kAccent : kRed,
+          ),
+        ),
+      ],
     );
   }
 }

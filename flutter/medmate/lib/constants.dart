@@ -1,14 +1,7 @@
 import 'package:flutter/material.dart';
 
-// ─────────────────────────────────────────────
-// API Base URL
-// 10.0.2.2 = localhost on Android emulator
-// ─────────────────────────────────────────────
-const String kBaseUrl = "http://10.0.2.2:8000";
+const String kBaseUrl = 'https://marvellous-diagnostically-keli.ngrok-free.dev';
 
-// ─────────────────────────────────────────────
-// App Colors
-// ─────────────────────────────────────────────
 const Color kPrimary  = Color(0xFF2196F3);
 const Color kAccent   = Color(0xFF4CAF50);
 const Color kBg       = Color(0xFFF4F6FA);

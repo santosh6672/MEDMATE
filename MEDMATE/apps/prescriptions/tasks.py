@@ -1,63 +1,37 @@
 """
 tasks.py
-─────────
-Celery task: fetch prescription → run AI pipeline → save medicines to DB.
-
-Fixes vs original:
-  - autoretry_for narrowed to transient errors only (OSError, RuntimeError,
-    AIExtractionError). Permanent errors (FileNotFoundError,
-    Prescription.DoesNotExist) set status="failed" and do NOT retry.
-  - select_for_update(status="pending") prevents duplicate task processing.
-  - _s() helper removed — now imported as safe_str from utils.sanitise.
-  - _s() was being redefined on every loop iteration; that is gone entirely.
-  - "raise e" replaced with bare "raise" to preserve full traceback.
-  - logging instead of print().
-  - processed_empty status documented; added status guard to skip non-pending.
 """
 
 import logging
 import os
 import time
+from pathlib import Path
 
 from celery import shared_task
 from django.apps import apps
-from django.db import transaction
+from django.conf import settings
+from django.db import OperationalError, transaction
 
 from apps.ai_engine.medicine_reasoner.qwen_instruct import AIExtractionError
 from apps.ai_engine.utils.sanitise import safe_str
 
 logger = logging.getLogger(__name__)
 
-# Statuses that represent a terminal state — do not re-process
-_TERMINAL_STATUSES = {"processing", "processed", "processed_empty", "failed"}
-
 
 @shared_task(
     bind=True,
-    # Only retry on errors that are genuinely transient.
-    # FileNotFoundError and ObjectDoesNotExist are permanent — no point retrying.
-    autoretry_for=(OSError, RuntimeError, AIExtractionError),
+    autoretry_for=(RuntimeError, AIExtractionError),
     retry_backoff=5,
+    retry_backoff_max=120,
+    retry_jitter=True,
     retry_kwargs={"max_retries": 3},
 )
 def process_prescription_ai(self, prescription_id: int):
-    """
-    AI processing task for a single prescription.
-
-    Steps:
-        1. Fetch prescription with a pessimistic lock (prevents duplicate runs).
-        2. Verify the image file exists on disk.
-        3. Run the AI pipeline (preprocess → OCR → correct → extract).
-        4. Atomically replace medicine rows with the new extraction result.
-        5. Set final status: 'processed' (medicines found) or
-           'processed_empty' (blank / illegible prescription).
-
-    On unrecoverable failure, status is set to 'failed'.
-    """
     logger.info(
-        "TASK START  prescription_id=%d  task_id=%s",
+        "TASK START  prescription_id=%d  task_id=%s  attempt=%d",
         prescription_id,
         self.request.id,
+        self.request.retries + 1,
     )
 
     from apps.ai_engine.pipeline import get_pipeline
@@ -69,77 +43,79 @@ def process_prescription_ai(self, prescription_id: int):
     t_start      = time.time()
 
     try:
-        # ── Fetch with pessimistic lock ────────────────────────────────────
-        # select_for_update() prevents a duplicate Celery message from running
-        # the pipeline twice on the same row.
-        # If status is already non-pending (e.g. a duplicate task), this
-        # raises DoesNotExist and exits cleanly without retrying.
-        with transaction.atomic():
-            prescription = (
-                Prescription.objects
-                .select_for_update()
-                .get(id=prescription_id, status="pending")
+        # ── Pessimistic lock — skip if already claimed by another worker ───
+        try:
+            with transaction.atomic():
+                prescription = (
+                    Prescription.objects
+                    .select_for_update(nowait=True)
+                    .get(id=prescription_id, status="pending")
+                )
+                prescription.status = "processing"
+                prescription.save(update_fields=["status"])
+        except OperationalError:
+            logger.warning(
+                "Prescription %d locked by another worker — skipping",
+                prescription_id,
             )
-            prescription.status = "processing"
-            prescription.save(update_fields=["status"])
+            return {"status": "skipped", "reason": "locked"}
 
-        logger.info("Prescription %d locked, status → processing", prescription_id)
+        logger.info("Prescription %d locked — status → processing", prescription_id)
 
-        # ── Verify image exists ────────────────────────────────────────────
+        # ── Path validation ────────────────────────────────────────────────
         image_path = prescription.image.path
-        logger.info("Image path: %s", image_path)
-        if not os.path.exists(image_path):
-            # Permanent failure — mark failed immediately, do not retry
-            raise FileNotFoundError(f"Image file not found: {image_path}")
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        resolved   = Path(image_path).resolve()
 
-        # ── Run AI pipeline ────────────────────────────────────────────────
-        logger.info("Acquiring AI pipeline …")
-        t = time.time()
+        if not str(resolved).startswith(str(media_root)):
+            raise ValueError(f"Path traversal detected: {image_path}")
+
+        if not resolved.exists():
+            raise FileNotFoundError(f"Image not found: {image_path}")
+
+        logger.info("Image verified: %s", image_path)
+
+        # ── AI pipeline ────────────────────────────────────────────────────
+        t        = time.time()
         pipeline = get_pipeline()
-        logger.info("Pipeline ready (%.1fs wait)", time.time() - t)
+        logger.info("Pipeline acquired — %.1fs wait", time.time() - t)
 
-        t = time.time()
-        logger.info("Running AI pipeline …")
-        result    = pipeline.process(image_path)
-        logger.info("Pipeline finished in %.1fs", time.time() - t)
+        t      = time.time()
+        result = pipeline.process(image_path)
+        logger.info("Pipeline finished — %.1fs", time.time() - t)
 
-        medicines = result.get("medicines", [])
+        medicines = [m for m in result.get("medicines", []) if isinstance(m, dict)]
         logger.info("%d medicine(s) detected", len(medicines))
 
-        # ── Persist medicines atomically ───────────────────────────────────
+        # ── Atomic bulk persist ────────────────────────────────────────────
         with transaction.atomic():
-            # Delete any previous medicines (idempotent re-run support)
             Medicine.objects.filter(prescription=prescription).delete()
-
-            for med in medicines:
-                # safe_str is the shared sentinel from utils/sanitise.py.
-                # qwen_instruct already sanitised these, but this is the
-                # final DB-write guard.
-                name      = safe_str(med.get("name"))
-                dosage    = safe_str(med.get("dosage"))
-                frequency = safe_str(med.get("frequency"))
-
-                Medicine.objects.create(
-                    prescription=prescription,
-                    name=name,
-                    dosage=dosage,
-                    frequency=frequency,
+            Medicine.objects.bulk_create([
+                Medicine(
+                    prescription     = prescription,
+                    name             = safe_str(med.get("name")),
+                    generic_name     = safe_str(med.get("generic_name")),
+                    dosage           = safe_str(med.get("dosage")),
+                    frequency        = safe_str(med.get("frequency")),
+                    duration         = safe_str(med.get("duration")),
+                    instructions     = safe_str(med.get("instructions")),
+                    type             = safe_str(med.get("type")),
+                    dose_flag        = safe_str(med.get("dose_flag")),
+                    dose_flag_reason = safe_str(med.get("dose_flag_reason")),
                 )
-                logger.debug("Saved medicine: %s | %s | %s", name, dosage, frequency)
+                for med in medicines
+            ], batch_size=100)
 
-        # ── Update final status ────────────────────────────────────────────
-        # 'processed_empty' means the pipeline ran successfully but the image
-        # contained no readable prescription data (blank page, wrong document,
-        # illegible handwriting). This is a valid terminal state — not a failure.
-        prescription.status = "processed" if medicines else "processed_empty"
-        prescription.save(update_fields=["status"])
+        # ── Final status ───────────────────────────────────────────────────
+        prescription.doctor    = safe_str(result.get("doctor"))
+        prescription.diagnosis = safe_str(result.get("diagnosis"))
+        prescription.status    = "processed" if medicines else "processed_empty"
+        prescription.save(update_fields=["status", "doctor", "diagnosis"])
 
         elapsed = time.time() - t_start
         logger.info(
             "TASK COMPLETE  prescription_id=%d  medicines=%d  elapsed=%.1fs",
-            prescription_id,
-            len(medicines),
-            elapsed,
+            prescription_id, len(medicines), elapsed,
         )
         return {
             "status":          "success",
@@ -148,27 +124,28 @@ def process_prescription_ai(self, prescription_id: int):
         }
 
     except Prescription.DoesNotExist:
-        # Either the row doesn't exist or it's already in a non-pending state.
-        # Both are permanent — log and exit without retrying.
         logger.warning(
-            "Prescription %d not found or already processed — skipping.",
+            "Prescription %d not found or not pending — skipping",
             prescription_id,
         )
         return {"status": "skipped", "reason": "not_found_or_already_processed"}
 
-    except FileNotFoundError:
-        # Permanent failure — no point retrying; file will not appear.
-        logger.error("Image file missing for prescription %d", prescription_id)
-        if prescription:
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("Permanent failure for prescription %d: %s", prescription_id, exc)
+        if prescription is not None:
             prescription.status = "failed"
             prescription.save(update_fields=["status"])
-        return {"status": "failed", "reason": "image_not_found"}
+        return {"status": "failed", "reason": str(exc)}
 
     except Exception:
-        # Transient failure — let Celery's autoretry_for handle the retry.
-        # Bare `raise` preserves the original traceback (unlike `raise e`).
-        logger.exception("TASK FAILED for prescription %d", prescription_id)
-        if prescription:
-            prescription.status = "failed"
-            prescription.save(update_fields=["status"])
+        logger.exception("TASK FAILED  prescription_id=%d", prescription_id)
+        if prescription is not None:
+            try:
+                prescription.status = "failed"
+                prescription.save(update_fields=["status"])
+            except Exception:
+                logger.exception(
+                    "Could not update status to failed for prescription %d",
+                    prescription_id,
+                )
         raise

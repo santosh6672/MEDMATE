@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
+
 import '../constants.dart';
 
-// ─────────────────────────────────────────────
-// COMMON WIDGETS
-// Reused across multiple screens
-// ─────────────────────────────────────────────
-
-// Red error banner shown below forms
 class ErrorBanner extends StatelessWidget {
   final String message;
+
   const ErrorBanner({super.key, required this.message});
 
   @override
@@ -25,8 +21,10 @@ class ErrorBanner extends StatelessWidget {
           const Icon(Icons.error_outline, color: kRed, size: 18),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(message,
-                style: const TextStyle(color: kRed, fontSize: 14)),
+            child: Text(
+              message,
+              style: const TextStyle(color: kRed, fontSize: 14),
+            ),
           ),
         ],
       ),
@@ -34,11 +32,10 @@ class ErrorBanner extends StatelessWidget {
   }
 }
 
-// Blue/green card used on the Dashboard
 class DashCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
+  final IconData    icon;
+  final String      label;
+  final Color       color;
   final VoidCallback onTap;
 
   const DashCard({
@@ -53,6 +50,7 @@ class DashCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
@@ -61,9 +59,9 @@ class DashCard extends StatelessWidget {
           border: Border.all(color: color.withOpacity(0.3)),
           boxShadow: [
             BoxShadow(
-              color: color.withOpacity(0.08),
+              color:      color.withOpacity(0.08),
               blurRadius: 10,
-              offset: const Offset(0, 4),
+              offset:     const Offset(0, 4),
             ),
           ],
         ),
@@ -73,18 +71,21 @@ class DashCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.12),
+                color:        color.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(icon, color: color, size: 24),
             ),
             const SizedBox(height: 14),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: kTextDark,
-                    height: 1.4)),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize:   14,
+                fontWeight: FontWeight.w600,
+                color:      kTextDark,
+                height:     1.4,
+              ),
+            ),
           ],
         ),
       ),
@@ -92,24 +93,31 @@ class DashCard extends StatelessWidget {
   }
 }
 
-// Reusable text field decoration
 InputDecoration inputDecoration(String hint, IconData icon) {
   return InputDecoration(
-    hintText: hint,
+    hintText:   hint,
     prefixIcon: Icon(icon, color: kPrimary),
-    filled: true,
-    fillColor: kWhite,
+    filled:     true,
+    fillColor:  kWhite,
     border: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
-      borderSide: BorderSide.none,
+      borderSide:   BorderSide.none,
     ),
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+      borderSide:   const BorderSide(color: Color(0xFFE0E0E0)),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: kPrimary, width: 2),
+      borderSide:   const BorderSide(color: kPrimary, width: 2),
+    ),
+    errorBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide:   const BorderSide(color: kRed),
+    ),
+    focusedErrorBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide:   const BorderSide(color: kRed, width: 2),
     ),
   );
 }
