@@ -102,6 +102,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── DRF ────────────────────────────────────────────────────────────────────────
 REST_FRAMEWORK = {
+    # Without this, DRF defaults to IsAuthenticated globally which blocks
+    # public endpoints (login, register) even when the view sets AllowAny.
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.AllowAny",
+    ),
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
@@ -113,8 +118,10 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "20/hour",
-        "user": "200/hour",
+        # 20/hour is too tight during development — emulator hits it fast.
+        # Tighten back to 20/hour before deploying to production.
+        "anon": "200/hour",
+        "user": "1000/hour",
     },
 }
 
@@ -122,8 +129,13 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME":  timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
-    "ROTATE_REFRESH_TOKENS":  True,
-    "BLACKLIST_AFTER_ROTATION": True,
+    # ROTATE_REFRESH_TOKENS=True means every /token/refresh/ call issues a NEW
+    # refresh token and blacklists the old one. If Flutter doesn't save the new
+    # refresh token back to storage, the next refresh will 401.
+    # Set to False during development; re-enable in production only after
+    # confirming Flutter saves the new refresh token from the response.
+    "ROTATE_REFRESH_TOKENS":    False,
+    "BLACKLIST_AFTER_ROTATION": False,
     "ALGORITHM":   "HS256",
     "SIGNING_KEY": SECRET_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),

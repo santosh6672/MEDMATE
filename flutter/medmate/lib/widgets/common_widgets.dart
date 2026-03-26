@@ -33,15 +33,17 @@ class ErrorBanner extends StatelessWidget {
 }
 
 class DashCard extends StatelessWidget {
-  final IconData    icon;
-  final String      label;
-  final Color       color;
+  final IconData icon;
+  final String label;
+  final String? description;
+  final Color color;
   final VoidCallback onTap;
 
   const DashCard({
     super.key,
     required this.icon,
     required this.label,
+    this.description,
     required this.color,
     required this.onTap,
   });
@@ -50,18 +52,17 @@ class DashCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: kWhite,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: color.withOpacity(0.3)),
           boxShadow: [
             BoxShadow(
-              color:      color.withOpacity(0.08),
+              color: color.withOpacity(0.08),
               blurRadius: 10,
-              offset:     const Offset(0, 4),
+              offset: const Offset(0, 4),
             ),
           ],
         ),
@@ -69,23 +70,27 @@ class DashCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color:        color.withOpacity(0.12),
+                color: color.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: color, size: 24),
+              child: Icon(icon, color: color, size: 22),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Text(
               label,
               style: const TextStyle(
-                fontSize:   14,
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color:      kTextDark,
-                height:     1.4,
+                color: kTextDark,
               ),
             ),
+            if (description != null)
+              Text(
+                description!,
+                style: const TextStyle(fontSize: 11, color: kTextGrey),
+              ),
           ],
         ),
       ),

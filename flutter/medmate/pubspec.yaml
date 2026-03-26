@@ -18,6 +18,10 @@ dependencies:
   flutter_local_notifications: ^17.2.3
   timezone: ^0.9.4
   lottie: ^3.3.2
+  flutter_timezone: ^5.0.2
+  synchronized: ^3.4.0
+  logger: ^2.7.0
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:

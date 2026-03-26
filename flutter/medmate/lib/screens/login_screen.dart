@@ -2,11 +2,14 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../constants.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/reminder_storage.dart';
+import '../services/anchor_storage.dart';
 import '../widgets/common_widgets.dart';
 import 'dashboard_screen.dart';
 import 'register_screen.dart';
+import 'anchor_setup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -31,7 +34,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    final email = _emailController.text.trim().toLowerCase();
+    final email    = _emailController.text.trim().toLowerCase();
     final password = _passwordController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
@@ -42,15 +45,18 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_isLoading) return;
 
     setState(() {
-      _isLoading = true;
+      _isLoading    = true;
       _errorMessage = '';
     });
 
     try {
-      final response = await ApiService.postWithAuth(
+      // FIX: Login is a PUBLIC endpoint — use postPublic, not postWithAuth.
+      // postWithAuth attaches an Authorization header which Django rejects
+      // before the view runs, producing a 401 even with correct credentials.
+      final response = await ApiService.postPublic(
         '$kBaseUrl/api/users/login/',
         {
-          'email': email,
+          'email':    email,
           'password': password,
         },
       );
@@ -60,7 +66,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        final access  = data['access'] as String?;
+        final access  = data['access']  as String?;
         final refresh = data['refresh'] as String?;
 
         if (access == null || refresh == null) {
@@ -71,11 +77,22 @@ class _LoginScreenState extends State<LoginScreen> {
         await ReminderStorage.clearAll();
         await ApiService.saveTokens(access, refresh);
 
+        // Save username if present in response
+        final username = data['username'] as String? ?? data['first_name'] as String? ?? 'User';
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('username', username);
+
+        final hasAnchors = await AnchorStorage.hasAnchors();
+
         if (!mounted) return;
 
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
+          MaterialPageRoute(
+            builder: (_) => hasAnchors
+                ? const DashboardScreen()
+                : const AnchorSetupScreen(),
+          ),
           (_) => false,
         );
       } else if (response.statusCode == 400) {
@@ -106,7 +123,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     setState(() {
       _errorMessage = message;
-      _isLoading = false;
+      _isLoading    = false;
     });
   }
 
@@ -115,7 +132,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
-        title: const Text('Login'),
+        title:           const Text('Login'),
         backgroundColor: kPrimary,
         foregroundColor: kWhite,
       ),
@@ -128,23 +145,17 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 20),
 
               TextField(
-                controller: _emailController,
+                controller:  _emailController,
                 keyboardType: TextInputType.emailAddress,
-                decoration: inputDecoration(
-                  'Email',
-                  Icons.email_outlined,
-                ),
+                decoration:  inputDecoration('Email', Icons.email_outlined),
               ),
 
               const SizedBox(height: 16),
 
               TextField(
-                controller: _passwordController,
+                controller:  _passwordController,
                 obscureText: !_showPassword,
-                decoration: inputDecoration(
-                  'Password',
-                  Icons.lock_outline,
-                ).copyWith(
+                decoration:  inputDecoration('Password', Icons.lock_outline).copyWith(
                   suffixIcon: IconButton(
                     icon: Icon(
                       _showPassword
@@ -152,9 +163,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           : Icons.visibility_outlined,
                       color: kTextGrey,
                     ),
-                    onPressed: () => setState(
-                      () => _showPassword = !_showPassword,
-                    ),
+                    onPressed: () =>
+                        setState(() => _showPassword = !_showPassword),
                   ),
                 ),
               ),
@@ -172,19 +182,19 @@ class _LoginScreenState extends State<LoginScreen> {
                   onPressed: _isLoading ? null : _login,
                   child: _isLoading
                       ? const SizedBox(
-                          width: 22,
+                          width:  22,
                           height: 22,
-                          child: CircularProgressIndicator(
-                            color: kWhite,
+                          child:  CircularProgressIndicator(
+                            color:       kWhite,
                             strokeWidth: 2,
                           ),
                         )
                       : const Text(
                           'Login',
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize:   16,
                             fontWeight: FontWeight.w600,
-                            color: kWhite,
+                            color:      kWhite,
                           ),
                         ),
                 ),
@@ -209,7 +219,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: const Text(
                       'Register',
                       style: TextStyle(
-                        color: kPrimary,
+                        color:      kPrimary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),

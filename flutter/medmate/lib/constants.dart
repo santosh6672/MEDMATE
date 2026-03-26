@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-const String kBaseUrl = 'https://marvellous-diagnostically-keli.ngrok-free.dev';
+const String kBaseUrl = "http://127.0.0.1:8000";
 
 const Color kPrimary  = Color(0xFF2196F3);
 const Color kAccent   = Color(0xFF4CAF50);

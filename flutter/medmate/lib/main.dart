@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
 
 import 'constants.dart';
 import 'services/api_service.dart';
-import 'services/notification_service.dart';
-import 'services/reminder_storage.dart';
+import 'services/anchor_storage.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/start_screen.dart';
+import 'screens/anchor_setup_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,10 +17,8 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
-  tz.initializeTimeZones();
-  tz.setLocalLocation(tz.getLocation('Asia/Kolkata'));
-
-  await initNotifications();
+  // Timezone initialization is no longer needed for native alarms.
+  // initNotifications() is removed because we now use the native alarm system.
 
   runApp(const MedMateApp());
 }
@@ -36,10 +32,10 @@ class MedMateApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'MedMate',
       theme: ThemeData(
-        colorScheme:             ColorScheme.fromSeed(seedColor: kPrimary),
-        primaryColor:            kPrimary,
+        colorScheme: ColorScheme.fromSeed(seedColor: kPrimary),
+        primaryColor: kPrimary,
         scaffoldBackgroundColor: kBg,
-        fontFamily:              'Roboto',
+        fontFamily: 'Roboto',
       ),
       home: const _SplashScreen(),
     );
@@ -61,7 +57,7 @@ class _SplashScreenState extends State<_SplashScreen> {
   }
 
   Future<void> _checkAuth() async {
-    final prefs        = await SharedPreferences.getInstance();
+    final prefs = await SharedPreferences.getInstance();
     final refreshToken = prefs.getString('refresh');
 
     bool isLoggedIn = false;
@@ -71,12 +67,16 @@ class _SplashScreenState extends State<_SplashScreen> {
 
     if (!mounted) return;
 
+    Widget nextScreen = const StartScreen();
+    if (isLoggedIn) {
+      final hasAnchors = await AnchorStorage.hasAnchors();
+      if (!mounted) return;
+      nextScreen = hasAnchors ? const DashboardScreen() : const AnchorSetupScreen();
+    }
+
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (_) =>
-            isLoggedIn ? const DashboardScreen() : const StartScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => nextScreen),
     );
   }
 
@@ -90,7 +90,7 @@ class _SplashScreenState extends State<_SplashScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const CircleAvatar(
-                radius:          50,
+                radius: 50,
                 backgroundColor: kWhite,
                 child: Icon(Icons.medical_services, size: 50, color: kPrimary),
               ),
@@ -98,9 +98,9 @@ class _SplashScreenState extends State<_SplashScreen> {
               const Text(
                 'MedMate',
                 style: TextStyle(
-                  fontSize:   36,
+                  fontSize: 36,
                   fontWeight: FontWeight.bold,
-                  color:      kWhite,
+                  color: kWhite,
                 ),
               ),
               const SizedBox(height: 8),
@@ -110,7 +110,7 @@ class _SplashScreenState extends State<_SplashScreen> {
               ),
               const SizedBox(height: 40),
               const CircularProgressIndicator(
-                color:       kWhite,
+                color: kWhite,
                 strokeWidth: 2,
               ),
             ],

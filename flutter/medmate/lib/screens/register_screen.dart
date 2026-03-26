@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../services/api_service.dart';
 import '../widgets/common_widgets.dart';
-import 'dashboard_screen.dart';
+import 'login_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -56,41 +56,45 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      final response = await ApiService.postWithAuth(
+      // FIX 1: Register uses a plain http.post — NOT postWithAuth.
+      // postWithAuth attaches a Bearer token header which Django's JWT
+      // middleware rejects before the view even runs, causing 401.
+      // Register and login are PUBLIC endpoints — no token needed.
+      //
+      // FIX 2: Field names corrected to match the Django serializer:
+      //   'name'             → 'username'       (Django User model field)
+      //   'password_confirm' → 'password2'      (UserRegistrationSerializer field)
+      final response = await ApiService.postPublic(
         '$kBaseUrl/api/users/register/',
         {
-          'name':              _nameController.text.trim(),
-          'email':             _emailController.text.trim().toLowerCase(),
-          'password':          _passwordController.text,
-          'password_confirm':  _confirmController.text,
+          'username':  _nameController.text.trim(),
+          'email':     _emailController.text.trim().toLowerCase(),
+          'password':  _passwordController.text,
+          'password2': _confirmController.text,
         },
       );
 
       if (!mounted) return;
 
       if (response.statusCode == 201) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final access  = data['access']  as String?;
-        final refresh = data['refresh'] as String?;
-
-        if (access == null || refresh == null) {
-          _setError('Registration succeeded but login failed. Please sign in.');
-          return;
+        // FIX 3: The RegisterView returns only { message, email } — no tokens.
+        // Do not try to extract access/refresh here; redirect to login instead.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Account created! Please sign in.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          );
         }
-
-        await ApiService.saveTokens(access, refresh);
-
-        if (!mounted) return;
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
-          (_) => false,
-        );
 
       } else if (response.statusCode == 400) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final message = _extractError(data);
-        _setError(message);
+        _setError(_extractError(data));
 
       } else {
         _setError('Registration failed (${response.statusCode}). Please try again.');
@@ -103,7 +107,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   String _extractError(Map<String, dynamic> data) {
-    for (final key in ['email', 'password', 'name', 'non_field_errors', 'detail']) {
+    for (final key in ['email', 'password', 'username', 'non_field_errors', 'detail']) {
       final val = data[key];
       if (val is List && val.isNotEmpty) return val.first.toString();
       if (val is String && val.isNotEmpty) return val;
@@ -122,15 +126,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // ── Validators ─────────────────────────────────────────────────────────────
 
   String? _validateName(String? v) {
-    if (v == null || v.trim().isEmpty) return 'Name is required';
-    if (v.trim().length < 2) return 'Name must be at least 2 characters';
+    if (v == null || v.trim().isEmpty) return 'Username is required';
+    if (v.trim().length < 2) return 'Username must be at least 2 characters';
     return null;
   }
 
   String? _validateEmail(String? v) {
     if (v == null || v.trim().isEmpty) return 'Email is required';
-    final valid = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
-        .hasMatch(v.trim());
+    final valid = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim());
     if (!valid) return 'Enter a valid email address';
     return null;
   }
@@ -159,10 +162,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         foregroundColor: kTextDark,
         title: const Text(
           'Create Account',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color:      kTextDark,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold, color: kTextDark),
         ),
       ),
       body: SafeArea(
@@ -176,36 +176,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const _RegisterHeader(),
                 const SizedBox(height: 28),
                 TextFormField(
-                  controller:    _nameController,
-                  focusNode:     _nameFocus,
-                  decoration:    inputDecoration('Full Name', Icons.person_outline),
-                  textInputAction: TextInputAction.next,
-                  keyboardType:  TextInputType.name,
-                  textCapitalization: TextCapitalization.words,
-                  onFieldSubmitted: (_) =>
+                  controller:         _nameController,
+                  focusNode:          _nameFocus,
+                  decoration:         inputDecoration('Username', Icons.person_outline),
+                  textInputAction:    TextInputAction.next,
+                  keyboardType:       TextInputType.name,
+                  textCapitalization: TextCapitalization.none,
+                  onFieldSubmitted:   (_) =>
                       FocusScope.of(context).requestFocus(_emailFocus),
                   validator: _validateName,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
-                  controller:    _emailController,
-                  focusNode:     _emailFocus,
-                  decoration:    inputDecoration('Email', Icons.email_outlined),
-                  keyboardType:  TextInputType.emailAddress,
+                  controller:      _emailController,
+                  focusNode:       _emailFocus,
+                  decoration:      inputDecoration('Email', Icons.email_outlined),
+                  keyboardType:    TextInputType.emailAddress,
                   textInputAction: TextInputAction.next,
-                  autocorrect:   false,
+                  autocorrect:     false,
                   onFieldSubmitted: (_) =>
                       FocusScope.of(context).requestFocus(_passwordFocus),
                   validator: _validateEmail,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
-                  controller:     _passwordController,
-                  focusNode:      _passwordFocus,
-                  decoration:     inputDecoration(
-                    'Password',
-                    Icons.lock_outline,
-                  ).copyWith(
+                  controller:      _passwordController,
+                  focusNode:       _passwordFocus,
+                  decoration:      inputDecoration('Password', Icons.lock_outline).copyWith(
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscurePass
@@ -213,11 +210,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             : Icons.visibility_off_outlined,
                         color: kTextGrey,
                       ),
-                      onPressed: () =>
-                          setState(() => _obscurePass = !_obscurePass),
+                      onPressed: () => setState(() => _obscurePass = !_obscurePass),
                     ),
                   ),
-                  obscureText:    _obscurePass,
+                  obscureText:     _obscurePass,
                   textInputAction: TextInputAction.next,
                   onFieldSubmitted: (_) =>
                       FocusScope.of(context).requestFocus(_confirmFocus),
@@ -225,12 +221,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
-                  controller:     _confirmController,
-                  focusNode:      _confirmFocus,
-                  decoration:     inputDecoration(
-                    'Confirm Password',
-                    Icons.lock_outline,
-                  ).copyWith(
+                  controller:      _confirmController,
+                  focusNode:       _confirmFocus,
+                  decoration:      inputDecoration('Confirm Password', Icons.lock_outline).copyWith(
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscureConfirm
@@ -242,7 +235,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           setState(() => _obscureConfirm = !_obscureConfirm),
                     ),
                   ),
-                  obscureText:    _obscureConfirm,
+                  obscureText:     _obscureConfirm,
                   textInputAction: TextInputAction.done,
                   onFieldSubmitted: (_) => _register(),
                   validator: _validateConfirm,
@@ -255,7 +248,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 FilledButton(
                   style: FilledButton.styleFrom(
                     backgroundColor: kPrimary,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding:         const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
@@ -310,8 +303,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 }
 
-// ── Header ─────────────────────────────────────────────────────────────────────
-
 class _RegisterHeader extends StatelessWidget {
   const _RegisterHeader();
 
@@ -321,7 +312,7 @@ class _RegisterHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: const EdgeInsets.all(14),
+          padding:     const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color:        kPrimary.withOpacity(0.1),
             borderRadius: BorderRadius.circular(14),

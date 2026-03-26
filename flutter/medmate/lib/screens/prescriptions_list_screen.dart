@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../constants.dart';
 import '../services/api_service.dart';
+import '../utils/date_utils.dart'; // shared formatDate utility
 import '../widgets/common_widgets.dart';
 import 'medicines_screen.dart';
 
@@ -14,8 +15,7 @@ class PrescriptionsListScreen extends StatefulWidget {
       _PrescriptionsListScreenState();
 }
 
-class _PrescriptionsListScreenState
-    extends State<PrescriptionsListScreen> {
+class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
   List<Map<String, dynamic>> _prescriptions = [];
   bool _isLoading = true;
   String _errorMessage = '';
@@ -28,7 +28,6 @@ class _PrescriptionsListScreenState
 
   Future<void> _loadPrescriptions() async {
     if (!mounted) return;
-
     setState(() {
       _isLoading = true;
       _errorMessage = '';
@@ -42,16 +41,12 @@ class _PrescriptionsListScreenState
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
-
-        if (decoded is List) {
-          _prescriptions = decoded
-              .whereType<Map>()
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList();
-        } else {
-          _prescriptions = [];
-        }
-
+        _prescriptions = decoded is List
+            ? decoded
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+            : [];
         setState(() => _isLoading = false);
       } else {
         _setError('Failed to load prescriptions.');
@@ -69,68 +64,44 @@ class _PrescriptionsListScreenState
     });
   }
 
-  Color _statusColor(String status) {
+  _StatusStyle _statusStyle(String status) {
     switch (status) {
       case 'processed':
-        return kAccent;
+        return _StatusStyle(
+          color: kAccent,
+          icon: Icons.check_circle_outline_rounded,
+          label: 'Done',
+        );
       case 'processing':
-        return kPrimary;
+        return _StatusStyle(
+          color: kPrimary,
+          icon: Icons.hourglass_top_outlined,
+          label: 'Processing',
+        );
       case 'pending':
-        return const Color(0xFFFF6F00);
+        return _StatusStyle(
+          color: const Color(0xFFFF6F00),
+          icon: Icons.schedule_outlined,
+          label: 'Queued',
+        );
       case 'processed_empty':
-        return kTextGrey;
+        return _StatusStyle(
+          color: kTextGrey,
+          icon: Icons.inbox_outlined,
+          label: 'No data',
+        );
       case 'failed':
-        return kRed;
+        return _StatusStyle(
+          color: kRed,
+          icon: Icons.error_outline_rounded,
+          label: 'Failed',
+        );
       default:
-        return kTextGrey;
-    }
-  }
-
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'processed':
-        return 'Done';
-      case 'processing':
-        return 'Processing...';
-      case 'pending':
-        return 'Queued';
-      case 'processed_empty':
-        return 'No data';
-      case 'failed':
-        return 'Failed';
-      default:
-        return status;
-    }
-  }
-
-  IconData _statusIcon(String status) {
-    switch (status) {
-      case 'processed':
-        return Icons.check_circle_outline;
-      case 'processing':
-        return Icons.hourglass_top_outlined;
-      case 'pending':
-        return Icons.schedule_outlined;
-      case 'processed_empty':
-        return Icons.inbox_outlined;
-      case 'failed':
-        return Icons.error_outline;
-      default:
-        return Icons.help_outline;
-    }
-  }
-
-  String _formatDate(String? dateStr) {
-    if (dateStr == null) return '';
-    try {
-      final dt = DateTime.parse(dateStr).toLocal();
-      const months = [
-        'Jan','Feb','Mar','Apr','May','Jun',
-        'Jul','Aug','Sep','Oct','Nov','Dec'
-      ];
-      return '${dt.day} ${months[dt.month - 1]} ${dt.year}';
-    } catch (_) {
-      return '';
+        return _StatusStyle(
+          color: kTextGrey,
+          icon: Icons.help_outline_rounded,
+          label: status,
+        );
     }
   }
 
@@ -150,227 +121,310 @@ class _PrescriptionsListScreenState
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _loadPrescriptions,
+            tooltip: 'Refresh',
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: kPrimary),
-            )
-          : _errorMessage.isNotEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: kPrimary),
+      );
+    }
+
+    if (_errorMessage.isNotEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.wifi_off_outlined,
+                    size: 40, color: kTextGrey),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Connection issue',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: kTextDark,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ErrorBanner(message: _errorMessage),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: _loadPrescriptions,
+                style: FilledButton.styleFrom(
+                  backgroundColor: kPrimary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.refresh_rounded, color: kWhite),
+                label: const Text('Retry',
+                    style: TextStyle(color: kWhite, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Wrap empty state in RefreshIndicator so user can pull to refresh
+    if (_prescriptions.isEmpty) {
+      return RefreshIndicator(
+        color: kPrimary,
+        onRefresh: _loadPrescriptions,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.6,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(22),
+                    decoration: BoxDecoration(
+                      color: kPrimary.withOpacity(0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.description_outlined,
+                      size: 44,
+                      color: kPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'No prescriptions yet',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: kTextDark,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Scan your first prescription to begin',
+                    style: TextStyle(color: kTextGrey, fontSize: 14),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Pull down to refresh',
+                    style: TextStyle(color: kTextGrey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      color: kPrimary,
+      onRefresh: _loadPrescriptions,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        itemCount: _prescriptions.length,
+        itemBuilder: (context, index) {
+          final p = _prescriptions[index];
+          final int id = p['id'] as int? ?? 0;
+          final List meds = p['medicines'] as List? ?? [];
+          final String status = p['status'] as String? ?? 'pending';
+          final String date = AppDateUtils.formatDate(p['created_at'] as String?);
+          final bool canOpen = meds.isNotEmpty;
+          final style = _statusStyle(status);
+
+          return _PrescriptionCard(
+            id: id,
+            meds: meds,
+            status: status,
+            date: date,
+            canOpen: canOpen,
+            statusStyle: style,
+            onTap: canOpen
+                ? () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => MedicinesScreen(medicines: meds),
+                      ),
+                    )
+                : null,
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── Status Style model ─────────────────────────────────────────────────────────
+
+class _StatusStyle {
+  final Color color;
+  final IconData icon;
+  final String label;
+  const _StatusStyle(
+      {required this.color, required this.icon, required this.label});
+}
+
+// ── Prescription Card ──────────────────────────────────────────────────────────
+
+class _PrescriptionCard extends StatelessWidget {
+  final int id;
+  final List meds;
+  final String status;
+  final String date;
+  final bool canOpen;
+  final _StatusStyle statusStyle;
+  final VoidCallback? onTap;
+
+  const _PrescriptionCard({
+    required this.id,
+    required this.meds,
+    required this.status,
+    required this.date,
+    required this.canOpen,
+    required this.statusStyle,
+    required this.onTap,
+  });
+
+  String get _subtitle {
+    if (meds.isEmpty) {
+      return status == 'failed' ? 'Processing failed' : 'AI is processing...';
+    }
+    return '${meds.length} medicine${meds.length == 1 ? '' : 's'} found';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: kWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: canOpen ? Colors.grey.shade200 : Colors.grey.shade100,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              // Status icon
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: statusStyle.color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: status == 'processing'
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: kPrimary,
+                        ),
+                      )
+                    : Icon(statusStyle.icon,
+                        color: statusStyle.color, size: 24),
+              ),
+              const SizedBox(width: 14),
+
+              // Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        const Icon(Icons.wifi_off_outlined,
-                            size: 48, color: kTextGrey),
-                        const SizedBox(height: 12),
-                        ErrorBanner(message: _errorMessage),
-                        const SizedBox(height: 16),
-                        OutlinedButton.icon(
-                          onPressed: _loadPrescriptions,
-                          icon: const Icon(Icons.refresh, color: kPrimary),
-                          label: const Text(
-                            'Retry',
-                            style: TextStyle(color: kPrimary),
+                        Expanded(
+                          child: Text(
+                            'Prescription #$id',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              color: kTextDark,
+                            ),
                           ),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: kPrimary),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: statusStyle.color.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            statusStyle.label,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: statusStyle.color,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                )
-              : _prescriptions.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                    const SizedBox(height: 4),
+                    Text(
+                      _subtitle,
+                      style: const TextStyle(
+                          color: kTextGrey, fontSize: 13),
+                    ),
+                    if (date.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Row(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: kPrimary.withOpacity(0.08),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.description_outlined,
-                              size: 40,
-                              color: kPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No prescriptions yet',
+                          Icon(Icons.calendar_today_outlined,
+                              size: 11, color: Colors.grey.shade400),
+                          const SizedBox(width: 4),
+                          Text(
+                            date,
                             style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: kTextDark,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            'Scan your first prescription to begin',
-                            style: TextStyle(
-                              color: kTextGrey,
-                              fontSize: 13,
-                            ),
+                                color: Colors.grey.shade400, fontSize: 11),
                           ),
                         ],
                       ),
-                    )
-                  : RefreshIndicator(
-                      color: kPrimary,
-                      onRefresh: _loadPrescriptions,
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _prescriptions.length,
-                        itemBuilder: (context, index) {
-                          final p = _prescriptions[index];
+                    ],
+                  ],
+                ),
+              ),
 
-                          final int id = p['id'] as int? ?? 0;
-                          final List meds =
-                              p['medicines'] as List? ?? [];
-                          final String status =
-                              p['status'] as String? ?? 'pending';
-                          final String date =
-                              _formatDate(p['created_at'] as String?);
-
-                          final bool canOpen = meds.isNotEmpty;
-                          final color = _statusColor(status);
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            decoration: BoxDecoration(
-                              color: kWhite,
-                              borderRadius: BorderRadius.circular(16),
-                              border:
-                                  Border.all(color: Colors.grey.shade200),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.04),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(16),
-                              onTap: canOpen
-                                  ? () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => MedicinesScreen(
-                                            medicines: meds,
-                                          ),
-                                        ),
-                                      )
-                                  : null,
-                              child: Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 48,
-                                      height: 48,
-                                      decoration: BoxDecoration(
-                                        color: color.withOpacity(0.1),
-                                        borderRadius:
-                                            BorderRadius.circular(12),
-                                      ),
-                                      child: Icon(
-                                        _statusIcon(status),
-                                        color: color,
-                                        size: 24,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Text(
-                                                'Prescription #$id',
-                                                style: const TextStyle(
-                                                  fontWeight:
-                                                      FontWeight.w700,
-                                                  fontSize: 15,
-                                                  color: kTextDark,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                  horizontal: 7,
-                                                  vertical: 2,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: color
-                                                      .withOpacity(0.12),
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                          20),
-                                                ),
-                                                child: Text(
-                                                  _statusLabel(status),
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: color,
-                                                    fontWeight:
-                                                        FontWeight.w600,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            meds.isEmpty
-                                                ? (status == 'failed'
-                                                    ? 'Processing failed'
-                                                    : 'AI is processing...')
-                                                : '${meds.length} medicine${meds.length == 1 ? '' : 's'} found',
-                                            style: const TextStyle(
-                                              color: kTextGrey,
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                          if (date.isNotEmpty) ...[
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              date,
-                                              style: const TextStyle(
-                                                color: kTextGrey,
-                                                fontSize: 11,
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                    if (canOpen)
-                                      const Icon(
-                                        Icons.chevron_right,
-                                        color: kTextGrey,
-                                        size: 20,
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+              // Chevron
+              if (canOpen) ...[
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right_rounded,
+                    color: kTextGrey, size: 20),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
