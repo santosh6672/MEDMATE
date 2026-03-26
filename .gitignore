@@ -1,0 +1,60 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+medenv/
+venv/
+.env/
+.venv/
+
+# Environment variables (VERY IMPORTANT)
+.env
+.env.*
+
+# HuggingFace / API keys / secrets
+*.env
+config.json
+secrets.json
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Database
+*.sqlite3
+db.sqlite3
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Celery
+celerybeat-schedule
+# Media & uploads
+media/
+
+# Model weights
+*.pth
+
+# Logs
+*.txt
+
+# Documents
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
