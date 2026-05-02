@@ -8,90 +8,77 @@ class ChangePasswordScreen extends StatefulWidget {
   const ChangePasswordScreen({super.key});
 
   @override
-  State<ChangePasswordScreen> createState() =>
-      _ChangePasswordScreenState();
+  State<ChangePasswordScreen> createState() => _ChangePasswordScreenState();
 }
 
-class _ChangePasswordScreenState
-    extends State<ChangePasswordScreen> {
-  final _oldCtrl     = TextEditingController();
+class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   final _newCtrl     = TextEditingController();
   final _confirmCtrl = TextEditingController();
 
-  bool _isLoading   = false;
-  bool _showOld     = false;
-  bool _showNew     = false;
-  bool _showConfirm = false;
-
+  bool   _isLoading   = false;
+  bool   _showNew     = false;
+  bool   _showConfirm = false;
   String _errorMessage   = '';
   String _successMessage = '';
 
   bool get _validLength => _newCtrl.text.length >= 8;
   bool get _match =>
-      _newCtrl.text == _confirmCtrl.text &&
-      _confirmCtrl.text.isNotEmpty;
+      _newCtrl.text == _confirmCtrl.text && _confirmCtrl.text.isNotEmpty;
 
   @override
   void dispose() {
-    _oldCtrl.dispose();
     _newCtrl.dispose();
     _confirmCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _changePassword() async {
-    if (_oldCtrl.text.isEmpty ||
-        _newCtrl.text.isEmpty ||
-        _confirmCtrl.text.isEmpty) {
+    if (_newCtrl.text.isEmpty || _confirmCtrl.text.isEmpty) {
       _setError('Please fill in all fields.');
       return;
     }
-
     if (!_validLength) {
       _setError('Password must be at least 8 characters.');
       return;
     }
-
     if (!_match) {
       _setError('Passwords do not match.');
       return;
     }
-
     if (_isLoading) return;
 
     setState(() {
-      _isLoading = true;
-      _errorMessage = '';
+      _isLoading      = true;
+      _errorMessage   = '';
       _successMessage = '';
     });
 
     try {
-      final response = await ApiService.postWithAuth(
-        '$kBaseUrl/api/users/change-password/',
-        {
-          'old_password': _oldCtrl.text,
-          'new_password': _newCtrl.text,
-        },
+      // Supabase password update — uses the access token in the header.
+      // No "old password" required; Supabase trusts the valid JWT.
+      final token = await ApiService.getAccessToken();
+      if (token == null || token.isEmpty) {
+        _setError('Not authenticated. Please login again.');
+        return;
+      }
+
+      final response = await ApiService.patchWithAuth(
+        '$kSupabaseUrl/auth/v1/user',
+        {'password': _newCtrl.text},
       );
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        setState(() {
-          _successMessage = 'Password updated successfully';
-        });
-
-        _oldCtrl.clear();
+        setState(() => _successMessage = 'Password updated successfully');
         _newCtrl.clear();
         _confirmCtrl.clear();
-
         await Future.delayed(const Duration(seconds: 1));
-
         if (mounted) Navigator.pop(context);
-      } else if (response.statusCode == 400) {
-        _setError('Current password is incorrect.');
+      } else if (response.statusCode == 422) {
+        _setError('New password is too weak. Use at least 8 characters.');
       } else {
-        _setError('Failed (${response.statusCode}).');
+        _setError('Failed (${response.statusCode}). Please try again.');
       }
     } catch (_) {
       _setError('Cannot connect to server.');
@@ -104,7 +91,7 @@ class _ChangePasswordScreenState
     if (!mounted) return;
     setState(() {
       _errorMessage = message;
-      _isLoading = false;
+      _isLoading    = false;
     });
   }
 
@@ -113,7 +100,7 @@ class _ChangePasswordScreenState
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
-        title: const Text('Change Password'),
+        title:           const Text('Change Password'),
         backgroundColor: kPrimary,
         foregroundColor: kWhite,
       ),
@@ -123,37 +110,35 @@ class _ChangePasswordScreenState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-
-              TextField(
-                controller: _oldCtrl,
-                obscureText: !_showOld,
-                decoration: inputDecoration(
-                  'Current Password',
-                  Icons.lock_outline,
-                ).copyWith(
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _showOld
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                      color: kTextGrey,
+              // Note: Supabase doesn't require current password verification
+              // via this endpoint — the valid JWT is proof of identity.
+              Container(
+                padding:     const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color:        kPrimary.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(10),
+                  border:       Border.all(color: kPrimary.withOpacity(0.2)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline, color: kPrimary, size: 16),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Enter your new password below. No current password needed.',
+                        style: TextStyle(fontSize: 12, color: kPrimary),
+                      ),
                     ),
-                    onPressed: () =>
-                        setState(() => _showOld = !_showOld),
-                  ),
+                  ],
                 ),
               ),
-
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
 
               TextField(
-                controller: _newCtrl,
+                controller:  _newCtrl,
                 obscureText: !_showNew,
-                onChanged: (_) => setState(() {}),
-                decoration: inputDecoration(
-                  'New Password',
-                  Icons.lock_outline,
-                ).copyWith(
+                onChanged:   (_) => setState(() {}),
+                decoration:  inputDecoration('New Password', Icons.lock_outline).copyWith(
                   suffixIcon: IconButton(
                     icon: Icon(
                       _showNew
@@ -161,30 +146,23 @@ class _ChangePasswordScreenState
                           : Icons.visibility_outlined,
                       color: kTextGrey,
                     ),
-                    onPressed: () =>
-                        setState(() => _showNew = !_showNew),
+                    onPressed: () => setState(() => _showNew = !_showNew),
                   ),
                 ),
               ),
 
               if (_newCtrl.text.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                _ValidationRow(
-                  ok: _validLength,
-                  label: 'At least 8 characters',
-                ),
+                _ValidationRow(ok: _validLength, label: 'At least 8 characters'),
               ],
 
               const SizedBox(height: 16),
 
               TextField(
-                controller: _confirmCtrl,
+                controller:  _confirmCtrl,
                 obscureText: !_showConfirm,
-                onChanged: (_) => setState(() {}),
-                decoration: inputDecoration(
-                  'Confirm Password',
-                  Icons.lock_outline,
-                ).copyWith(
+                onChanged:   (_) => setState(() {}),
+                decoration:  inputDecoration('Confirm Password', Icons.lock_outline).copyWith(
                   suffixIcon: IconButton(
                     icon: Icon(
                       _showConfirm
@@ -192,9 +170,8 @@ class _ChangePasswordScreenState
                           : Icons.visibility_outlined,
                       color: kTextGrey,
                     ),
-                    onPressed: () => setState(
-                      () => _showConfirm = !_showConfirm,
-                    ),
+                    onPressed: () =>
+                        setState(() => _showConfirm = !_showConfirm),
                   ),
                 ),
               ),
@@ -202,10 +179,8 @@ class _ChangePasswordScreenState
               if (_confirmCtrl.text.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 _ValidationRow(
-                  ok: _match,
-                  label: _match
-                      ? 'Passwords match'
-                      : 'Passwords do not match',
+                  ok:    _match,
+                  label: _match ? 'Passwords match' : 'Passwords do not match',
                 ),
               ],
 
@@ -218,22 +193,18 @@ class _ChangePasswordScreenState
 
               if (_successMessage.isNotEmpty) ...[
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding:     const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: kAccent.withOpacity(0.1),
+                    color:        kAccent.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: kAccent.withOpacity(0.4),
-                    ),
+                    border:       Border.all(color: kAccent.withOpacity(0.4)),
                   ),
-                  child: Row(
-                    children: const [
+                  child: const Row(
+                    children: [
                       Icon(Icons.check_circle, color: kAccent),
                       SizedBox(width: 8),
-                      Text(
-                        'Success',
-                        style: TextStyle(color: kAccent),
-                      ),
+                      Text('Password updated!',
+                          style: TextStyle(color: kAccent)),
                     ],
                   ),
                 ),
@@ -246,10 +217,10 @@ class _ChangePasswordScreenState
                   onPressed: _isLoading ? null : _changePassword,
                   child: _isLoading
                       ? const SizedBox(
-                          width: 20,
+                          width:  20,
                           height: 20,
-                          child: CircularProgressIndicator(
-                            color: kWhite,
+                          child:  CircularProgressIndicator(
+                            color:       kWhite,
                             strokeWidth: 2,
                           ),
                         )
@@ -265,13 +236,10 @@ class _ChangePasswordScreenState
 }
 
 class _ValidationRow extends StatelessWidget {
-  final bool ok;
+  final bool   ok;
   final String label;
 
-  const _ValidationRow({
-    required this.ok,
-    required this.label,
-  });
+  const _ValidationRow({required this.ok, required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -279,16 +247,13 @@ class _ValidationRow extends StatelessWidget {
       children: [
         Icon(
           ok ? Icons.check_circle : Icons.cancel,
-          size: 14,
+          size:  14,
           color: ok ? kAccent : kRed,
         ),
         const SizedBox(width: 6),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: ok ? kAccent : kRed,
-          ),
+          style: TextStyle(fontSize: 12, color: ok ? kAccent : kRed),
         ),
       ],
     );
