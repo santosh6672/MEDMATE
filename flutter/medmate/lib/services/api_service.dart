@@ -46,7 +46,6 @@ class ApiService {
 
   // ── Headers ────────────────────────────────────────────────────────────────
 
-  /// Standard headers for all AWS API Gateway requests.
   static Future<Map<String, String>> _authHeaders({
     bool includeContentType = false,
   }) async {
@@ -58,7 +57,6 @@ class ApiService {
     };
   }
 
-  /// Headers for Supabase auth endpoints.
   static Map<String, String> get _supabaseHeaders => {
     'Content-Type': 'application/json',
     'apikey': kSupabaseAnonKey,
@@ -66,8 +64,6 @@ class ApiService {
 
   // ── Supabase Auth ──────────────────────────────────────────────────────────
 
-  /// Login with email + password via Supabase.
-  /// Returns the full response body map on success, null on failure.
   static Future<Map<String, dynamic>?> login(
     String email,
     String password,
@@ -75,16 +71,14 @@ class ApiService {
     try {
       final response = await http
           .post(
-            Uri.parse(
-              '$kSupabaseUrl/auth/v1/token?grant_type=password',
-            ),
+            Uri.parse('$kSupabaseUrl/auth/v1/token?grant_type=password'),
             headers: _supabaseHeaders,
             body: jsonEncode({'email': email, 'password': password}),
           )
           .timeout(_authTimeout);
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final data    = jsonDecode(response.body) as Map<String, dynamic>;
         final access  = data['access_token']  as String?;
         final refresh = data['refresh_token'] as String?;
         if (access != null && refresh != null) {
@@ -98,17 +92,22 @@ class ApiService {
       catch (_)           { return null; }
   }
 
-  /// Sign up a new user via Supabase.
+  /// [username] is stored in Supabase user_metadata so profile can read it.
   static Future<Map<String, dynamic>?> signUp(
     String email,
-    String password,
-  ) async {
+    String password, {
+    String username = '',
+  }) async {
     try {
       final response = await http
           .post(
             Uri.parse('$kSupabaseUrl/auth/v1/signup'),
             headers: _supabaseHeaders,
-            body: jsonEncode({'email': email, 'password': password}),
+            body: jsonEncode({
+              'email':    email,
+              'password': password,
+              'data':     {'username': username},
+            }),
           )
           .timeout(_authTimeout);
 
@@ -121,8 +120,6 @@ class ApiService {
       catch (_)           { return null; }
   }
 
-  /// Refreshes the Supabase access token using the stored refresh token.
-  /// Returns true on success, false on any failure.
   static Future<bool> refreshToken() async {
     final refresh = await getRefreshToken();
     if (refresh == null || refresh.isEmpty) return false;
@@ -130,16 +127,14 @@ class ApiService {
     try {
       final response = await http
           .post(
-            Uri.parse(
-              '$kSupabaseUrl/auth/v1/token?grant_type=refresh_token',
-            ),
+            Uri.parse('$kSupabaseUrl/auth/v1/token?grant_type=refresh_token'),
             headers: _supabaseHeaders,
             body: jsonEncode({'refresh_token': refresh}),
           )
           .timeout(_authTimeout);
 
       if (response.statusCode == 200) {
-        final data      = jsonDecode(response.body) as Map<String, dynamic>;
+        final data       = jsonDecode(response.body) as Map<String, dynamic>;
         final newAccess  = data['access_token']  as String?;
         final newRefresh = data['refresh_token'] as String?;
         if (newAccess == null || newAccess.isEmpty) return false;
@@ -152,10 +147,9 @@ class ApiService {
       catch (_)           { return false; }
   }
 
-  /// Logs out the current user and clears stored tokens.
   static Future<void> logout() async {
     final token = await getAccessToken();
-    if (token != null) {
+    if (token != null && token.isNotEmpty) {
       try {
         await http
             .post(
@@ -171,9 +165,8 @@ class ApiService {
     await clearTokens();
   }
 
-  // ── AWS API Gateway — Prescriptions ───────────────────────────────────────
+  // ── AWS API Gateway — Health ───────────────────────────────────────────────
 
-  /// GET /health — checks if the backend is alive.
   static Future<bool> healthCheck() async {
     try {
       final response = await http
@@ -185,36 +178,34 @@ class ApiService {
     }
   }
 
-  /// POST /api/prescriptions/ — upload a prescription image (multipart).
-  /// [imageFile] is the image picked from the camera/gallery.
+  // ── AWS API Gateway — Prescriptions ───────────────────────────────────────
+
   static Future<http.Response> uploadPrescription(File imageFile) async {
     final token   = await getAccessToken();
     final request = http.MultipartRequest(
       'POST',
       Uri.parse('$kBaseUrl/api/prescriptions/'),
     );
-
     request.headers.addAll({
       if (token != null && token.isNotEmpty)
         'Authorization': 'Bearer $token',
     });
-
     request.files.add(
       await http.MultipartFile.fromPath('file', imageFile.path),
     );
 
-    final streamed  = await request.send().timeout(_timeout);
-    final response  = await http.Response.fromStream(streamed);
+    final streamed = await request.send().timeout(_timeout);
+    final response = await http.Response.fromStream(streamed);
 
-    // If 401, refresh and retry once.
     if (response.statusCode == 401 && await refreshToken()) {
-      final newToken  = await getAccessToken();
-      final retryReq  = http.MultipartRequest(
+      final newToken   = await getAccessToken();
+      final retryReq   = http.MultipartRequest(
         'POST',
         Uri.parse('$kBaseUrl/api/prescriptions/'),
       );
       retryReq.headers.addAll({
-        if (newToken != null) 'Authorization': 'Bearer $newToken',
+        if (newToken != null && newToken.isNotEmpty)
+          'Authorization': 'Bearer $newToken',
       });
       retryReq.files.add(
         await http.MultipartFile.fromPath('file', imageFile.path),
@@ -226,29 +217,22 @@ class ApiService {
     return response;
   }
 
-  /// GET /api/prescriptions/ — fetch all prescriptions for the current user.
-  static Future<http.Response> getPrescriptions() async {
-    return getWithAuth('$kBaseUrl/api/prescriptions/');
-  }
+  static Future<http.Response> getPrescriptions() =>
+      getWithAuth('$kBaseUrl/api/prescriptions/');
 
-  /// GET /api/prescriptions/{id} — fetch a single prescription by ID.
-  static Future<http.Response> getPrescription(String id) async {
-    return getWithAuth('$kBaseUrl/api/prescriptions/$id');
-  }
+  static Future<http.Response> getPrescription(String id) =>
+      getWithAuth('$kBaseUrl/api/prescriptions/$id');
 
-  /// DELETE /api/prescriptions/{id} — delete a prescription by ID.
-  static Future<http.Response> deletePrescription(String id) async {
-    return deleteWithAuth('$kBaseUrl/api/prescriptions/$id');
-  }
+  static Future<http.Response> deletePrescription(String id) =>
+      deleteWithAuth('$kBaseUrl/api/prescriptions/$id');
 
-  // ── Core HTTP helpers with auth + auto-refresh ────────────────────────────
+  // ── Core HTTP helpers ──────────────────────────────────────────────────────
 
   static Future<http.Response> getWithAuth(String url) async {
     var headers  = await _authHeaders();
     var response = await http
         .get(Uri.parse(url), headers: headers)
         .timeout(_timeout);
-
     if (response.statusCode == 401 && await refreshToken()) {
       headers  = await _authHeaders();
       response = await http
@@ -262,13 +246,12 @@ class ApiService {
     String url,
     Map<String, dynamic> body,
   ) async {
-    var headers  = await _authHeaders(includeContentType: true);
+    var headers  = await _authHeaders();
     var response = await http
         .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
         .timeout(_timeout);
-
     if (response.statusCode == 401 && await refreshToken()) {
-      headers  = await _authHeaders(includeContentType: true);
+      headers  = await _authHeaders();
       response = await http
           .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
           .timeout(_timeout);
@@ -280,13 +263,12 @@ class ApiService {
     String url,
     Map<String, dynamic> body,
   ) async {
-    var headers  = await _authHeaders(includeContentType: true);
+    var headers  = await _authHeaders();
     var response = await http
         .patch(Uri.parse(url), headers: headers, body: jsonEncode(body))
         .timeout(_timeout);
-
     if (response.statusCode == 401 && await refreshToken()) {
-      headers  = await _authHeaders(includeContentType: true);
+      headers  = await _authHeaders();
       response = await http
           .patch(Uri.parse(url), headers: headers, body: jsonEncode(body))
           .timeout(_timeout);
@@ -299,7 +281,6 @@ class ApiService {
     var response = await http
         .delete(Uri.parse(url), headers: headers)
         .timeout(_timeout);
-
     if (response.statusCode == 401 && await refreshToken()) {
       headers  = await _authHeaders();
       response = await http
