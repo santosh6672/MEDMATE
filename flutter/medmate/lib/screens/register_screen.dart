@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../constants.dart';
@@ -15,11 +13,11 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  final _formKey        = GlobalKey<FormState>();
-  final _nameFocus      = FocusNode();
-  final _emailFocus     = FocusNode();
-  final _passwordFocus  = FocusNode();
-  final _confirmFocus   = FocusNode();
+  final _formKey       = GlobalKey<FormState>();
+  final _nameFocus     = FocusNode();
+  final _emailFocus    = FocusNode();
+  final _passwordFocus = FocusNode();
+  final _confirmFocus  = FocusNode();
 
   final _nameController     = TextEditingController();
   final _emailController    = TextEditingController();
@@ -44,8 +42,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  // ── Register ───────────────────────────────────────────────────────────────
-
   Future<void> _register() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_isLoading) return;
@@ -56,63 +52,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      // FIX 1: Register uses a plain http.post — NOT postWithAuth.
-      // postWithAuth attaches a Bearer token header which Django's JWT
-      // middleware rejects before the view even runs, causing 401.
-      // Register and login are PUBLIC endpoints — no token needed.
-      //
-      // FIX 2: Field names corrected to match the Django serializer:
-      //   'name'             → 'username'       (Django User model field)
-      //   'password_confirm' → 'password2'      (UserRegistrationSerializer field)
-      final response = await ApiService.postPublic(
-        '$kBaseUrl/api/users/register/',
-        {
-          'username':  _nameController.text.trim(),
-          'email':     _emailController.text.trim().toLowerCase(),
-          'password':  _passwordController.text,
-          'password2': _confirmController.text,
-        },
+      // Supabase signup — email + password only.
+      // Username is stored in user_metadata.
+      final data = await ApiService.signUp(
+        _emailController.text.trim().toLowerCase(),
+        _passwordController.text,
+        username: _nameController.text.trim(),
       );
 
       if (!mounted) return;
 
-      if (response.statusCode == 201) {
-        // FIX 3: The RegisterView returns only { message, email } — no tokens.
-        // Do not try to extract access/refresh here; redirect to login instead.
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Account created! Please sign in.'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          );
-        }
-
-      } else if (response.statusCode == 400) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        _setError(_extractError(data));
-
+      if (data != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:         Text('Account created! Please sign in.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
       } else {
-        _setError('Registration failed (${response.statusCode}). Please try again.');
+        _setError('Registration failed. Email may already be in use.');
       }
     } on Exception {
       _setError('Cannot connect to server. Check your internet connection.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  String _extractError(Map<String, dynamic> data) {
-    for (final key in ['email', 'password', 'username', 'non_field_errors', 'detail']) {
-      final val = data[key];
-      if (val is List && val.isNotEmpty) return val.first.toString();
-      if (val is String && val.isNotEmpty) return val;
-    }
-    return 'Registration failed. Please check your details.';
   }
 
   void _setError(String message) {
@@ -122,8 +90,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _isLoading    = false;
     });
   }
-
-  // ── Validators ─────────────────────────────────────────────────────────────
 
   String? _validateName(String? v) {
     if (v == null || v.trim().isEmpty) return 'Username is required';
@@ -150,8 +116,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return null;
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -175,6 +139,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               children: [
                 const _RegisterHeader(),
                 const SizedBox(height: 28),
+
                 TextFormField(
                   controller:         _nameController,
                   focusNode:          _nameFocus,
@@ -187,6 +152,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: _validateName,
                 ),
                 const SizedBox(height: 16),
+
                 TextFormField(
                   controller:      _emailController,
                   focusNode:       _emailFocus,
@@ -199,6 +165,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: _validateEmail,
                 ),
                 const SizedBox(height: 16),
+
                 TextFormField(
                   controller:      _passwordController,
                   focusNode:       _passwordFocus,
@@ -210,7 +177,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             : Icons.visibility_off_outlined,
                         color: kTextGrey,
                       ),
-                      onPressed: () => setState(() => _obscurePass = !_obscurePass),
+                      onPressed: () =>
+                          setState(() => _obscurePass = !_obscurePass),
                     ),
                   ),
                   obscureText:     _obscurePass,
@@ -220,6 +188,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: _validatePassword,
                 ),
                 const SizedBox(height: 16),
+
                 TextFormField(
                   controller:      _confirmController,
                   focusNode:       _confirmFocus,
@@ -241,14 +210,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: _validateConfirm,
                 ),
                 const SizedBox(height: 24),
+
                 if (_errorMessage.isNotEmpty) ...[
                   ErrorBanner(message: _errorMessage),
                   const SizedBox(height: 16),
                 ],
+
                 FilledButton(
                   style: FilledButton.styleFrom(
                     backgroundColor: kPrimary,
-                    padding:         const EdgeInsets.symmetric(vertical: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
@@ -273,6 +244,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                 ),
                 const SizedBox(height: 16),
+
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
