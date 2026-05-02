@@ -19,38 +19,34 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen>
     with SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _allMedicines = [];
-  bool _isLoading = true;
-  String _userName = '';
-  int _streak = 0;
+  bool   _isLoading = true;
+  String _userName  = '';
+  int    _streak    = 0;
   double _adherence = 0.0;
+
   late AnimationController _progressController;
-  late Animation<double> _progressAnimation;
+  late Animation<double>   _progressAnimation;
 
   @override
   void initState() {
     super.initState();
     _progressController = AnimationController(
-      vsync: this,
+      vsync:    this,
       duration: const Duration(milliseconds: 800),
     );
+    // Safe default so _progressAnimation is never uninitialized
+    _progressAnimation = const AlwaysStoppedAnimation(0.0);
     _init();
   }
 
   Future<void> _init() async {
-    // Load user data
     final prefs = await SharedPreferences.getInstance();
-    _userName = prefs.getString('username') ?? 'User';
+    if (!mounted) return;
+    setState(() => _userName = prefs.getString('username') ?? 'User');
 
-    // Request permissions using AlarmService
     await AlarmService.instance.checkAndRequestPermissions();
-
-    // Daily reset
     await ReminderStorage.checkAndResetIfNewDay();
     await _loadSchedule();
-
-    // Load stats (you need to compute streak and adherence from your data)
-    _computeStats();
-    _startProgressAnimation();
   }
 
   Future<void> _loadSchedule() async {
@@ -58,22 +54,28 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (!mounted) return;
     setState(() {
       _allMedicines = data;
-      _isLoading = false;
+      _isLoading    = false;
     });
     _computeStats();
+    _progressController.reset();
+    _startProgressAnimation();
   }
 
   void _computeStats() {
     final total = _allMedicines.length;
     final taken = _allMedicines.where((e) => e['taken'] == true).length;
-    _adherence = total == 0 ? 0 : taken / total;
-    _streak = _adherence > 0.8 ? 3 : (_adherence > 0 ? 1 : 0); // dummy
+    _adherence  = total == 0 ? 0 : taken / total;
+    _streak     = _adherence > 0.8 ? 3 : (_adherence > 0 ? 1 : 0);
   }
 
   void _startProgressAnimation() {
-    _progressAnimation = Tween<double>(begin: 0, end: _adherence).animate(
-      CurvedAnimation(parent: _progressController, curve: Curves.easeOutCubic),
-    );
+    _progressAnimation = Tween<double>(
+      begin: 0,
+      end:   _adherence,
+    ).animate(CurvedAnimation(
+      parent: _progressController,
+      curve:  Curves.easeOutCubic,
+    ));
     _progressController.forward();
   }
 
@@ -84,16 +86,13 @@ class _DashboardScreenState extends State<DashboardScreen>
       await ReminderStorage.markAsTakenByBaseId(baseId);
     }
     await _loadSchedule();
-    _computeStats();
-    _progressController.reset();
-    _startProgressAnimation();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(currentlyTaken ? 'Unmarked' : 'Marked as taken'),
+          content:  Text(currentlyTaken ? 'Unmarked' : 'Marked as taken'),
           action: SnackBarAction(
-            label: 'Undo',
+            label:     'Undo',
             onPressed: () => _toggleTaken(baseId, !currentlyTaken),
           ),
           duration: const Duration(seconds: 3),
@@ -102,7 +101,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  // Grouping methods
+  // ── Grouping ───────────────────────────────────────────────────────────────
+
   List<Map<String, dynamic>> get _missedDoses =>
       _allMedicines.where((e) => _isMissed(e)).toList();
   List<Map<String, dynamic>> get _upcomingDoses =>
@@ -111,9 +111,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       _allMedicines.where((e) => e['taken'] == true).toList();
 
   bool _isMissed(Map<String, dynamic> medicine) {
-    final now = DateTime.now();
+    final now      = DateTime.now();
     final doseTime = DateTime(
-        now.year, now.month, now.day, medicine['hour'], medicine['minute']);
+        now.year, now.month, now.day,
+        medicine['hour'],   medicine['minute']);
     return doseTime.isBefore(now) && medicine['taken'] != true;
   }
 
@@ -126,8 +127,15 @@ class _DashboardScreenState extends State<DashboardScreen>
   String _getDynamicMessage() {
     if (_adherence >= 0.9) return '🎉 Perfect! Keep it up!';
     if (_adherence >= 0.6) return '👍 Good job, almost there!';
-    if (_adherence > 0) return '💪 Let’s finish the day strong!';
+    if (_adherence > 0)    return '💪 Let\'s finish the day strong!';
     return '🌟 Start your day with a dose!';
+  }
+
+  String _getTimeOfDay() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Morning';
+    if (hour < 17) return 'Afternoon';
+    return 'Evening';
   }
 
   @override
@@ -136,18 +144,20 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.dispose();
   }
 
+  // ── Build ──────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
-        title: const Text('MedMate'),
+        title:           const Text('MedMate'),
         backgroundColor: kPrimary,
         foregroundColor: kWhite,
-        elevation: 0,
+        elevation:       0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.person_outline),
+            icon:      const Icon(Icons.person_outline),
             onPressed: () async {
               await Navigator.push(
                 context,
@@ -165,23 +175,14 @@ class _DashboardScreenState extends State<DashboardScreen>
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  // Header (personalised)
                   _buildHeader(),
                   const SizedBox(height: 20),
-
-                  // Hero card (circular progress)
                   _buildHeroCard(),
                   const SizedBox(height: 24),
-
-                  // Quick actions (enhanced)
                   _buildQuickActions(),
                   const SizedBox(height: 24),
-
-                  // Insights section (intelligent)
                   _buildInsights(),
                   const SizedBox(height: 24),
-
-                  // Schedule grouped
                   const Text(
                     "Today's Schedule",
                     style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
@@ -189,9 +190,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                   const SizedBox(height: 12),
                   if (_allMedicines.isEmpty)
                     Container(
-                      padding: const EdgeInsets.all(30),
+                      padding:     const EdgeInsets.all(30),
                       decoration: BoxDecoration(
-                        color: kWhite,
+                        color:        kWhite,
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: const Center(
@@ -205,23 +206,22 @@ class _DashboardScreenState extends State<DashboardScreen>
                     Column(
                       children: [
                         if (_missedDoses.isNotEmpty)
-                          _buildSection('⚠ Missed', _missedDoses, isMissed: true),
+                          _buildSection('⚠ Missed', _missedDoses,
+                              isMissed: true),
                         if (_upcomingDoses.isNotEmpty)
                           _buildSection('⏳ Upcoming', _upcomingDoses),
                         if (_completedDoses.isNotEmpty)
-                          _buildSection('✔ Completed', _completedDoses, isCompleted: true),
+                          _buildSection('✔ Completed', _completedDoses,
+                              isCompleted: true),
                       ],
                     ),
                 ],
               ),
             ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // Navigate to manual medicine add screen
-          // You can add a new screen or reuse upload screen
-        },
+        onPressed:       () {},
         backgroundColor: kPrimary,
-        child: const Icon(Icons.add),
+        child:           const Icon(Icons.add),
       ),
     );
   }
@@ -233,15 +233,16 @@ class _DashboardScreenState extends State<DashboardScreen>
         Text(
           'Good ${_getTimeOfDay()}, $_userName 👋',
           style: const TextStyle(
-            fontSize: 22,
+            fontSize:   22,
             fontWeight: FontWeight.bold,
-            color: kTextDark,
+            color:      kTextDark,
           ),
         ),
         const SizedBox(height: 4),
         Row(
           children: [
-            Icon(Icons.local_fire_department, color: Colors.orange, size: 16),
+            const Icon(Icons.local_fire_department,
+                color: Colors.orange, size: 16),
             const SizedBox(width: 4),
             Text(
               '$_streak-day streak',
@@ -253,25 +254,19 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  String _getTimeOfDay() {
-    final hour = DateTime.now().hour;
-    if (hour < 12) return 'Morning';
-    if (hour < 17) return 'Afternoon';
-    return 'Evening';
-  }
-
   Widget _buildHeroCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [kPrimary, kPrimary.withBlue(180)],
-        ),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Column(
-        children: [
-          Row(
+    return AnimatedBuilder(
+      animation: _progressAnimation,
+      builder: (context, _) {
+        return Container(
+          padding:    const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [kPrimary, kPrimary.withBlue(180)],
+            ),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Column(
@@ -280,16 +275,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                   Text(
                     _getDynamicMessage(),
                     style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
+                        color: Colors.white70, fontSize: 14),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '${(_adherence * 100).toInt()}% completed',
                     style: const TextStyle(
-                      color: kWhite,
-                      fontSize: 24,
+                      color:      kWhite,
+                      fontSize:   24,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -300,19 +293,19 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ],
               ),
               SizedBox(
-                width: 80,
+                width:  80,
                 height: 80,
                 child: CircularProgressIndicator(
-                  value: _progressAnimation.value,
-                  strokeWidth: 8,
+                  value:           _progressAnimation.value,
+                  strokeWidth:     8,
                   backgroundColor: Colors.white.withOpacity(0.3),
-                  valueColor: const AlwaysStoppedAnimation(kWhite),
+                  valueColor:      const AlwaysStoppedAnimation(kWhite),
                 ),
               ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -329,14 +322,15 @@ class _DashboardScreenState extends State<DashboardScreen>
           children: [
             Expanded(
               child: DashCard(
-                icon: Icons.camera_alt_outlined,
-                label: 'Scan',
+                icon:        Icons.camera_alt_outlined,
+                label:       'Scan',
                 description: 'Upload prescription',
-                color: kPrimary,
+                color:       kPrimary,
                 onTap: () async {
                   await Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const UploadScreen()),
+                    MaterialPageRoute(
+                        builder: (_) => const UploadScreen()),
                   );
                   _loadSchedule();
                 },
@@ -345,15 +339,14 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(width: 12),
             Expanded(
               child: DashCard(
-                icon: Icons.history,
-                label: 'History',
+                icon:        Icons.history,
+                label:       'History',
                 description: 'Past prescriptions',
-                color: kAccent,
+                color:       kAccent,
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const PrescriptionsListScreen(),
-                  ),
+                      builder: (_) => const PrescriptionsListScreen()),
                 ),
               ),
             ),
@@ -364,25 +357,21 @@ class _DashboardScreenState extends State<DashboardScreen>
           children: [
             Expanded(
               child: DashCard(
-                icon: Icons.medication,
-                label: 'Add Manual',
+                icon:        Icons.medication,
+                label:       'Add Manual',
                 description: 'Enter medicine',
-                color: kPrimary,
-                onTap: () {
-                  // Navigate to manual add screen
-                },
+                color:       kPrimary,
+                onTap:       () {},
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: DashCard(
-                icon: Icons.insights,
-                label: 'Reports',
+                icon:        Icons.insights,
+                label:       'Reports',
                 description: 'View stats',
-                color: kPrimary,
-                onTap: () {
-                  // Show insights in detail
-                },
+                color:       kPrimary,
+                onTap:       () {},
               ),
             ),
           ],
@@ -393,11 +382,11 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _buildInsights() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding:    const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: kWhite,
+        color:        kWhite,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border:       Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -415,12 +404,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     Text(
                       '${(_adherence * 100).toInt()}%',
                       style: const TextStyle(
-                        fontSize: 24,
+                        fontSize:   24,
                         fontWeight: FontWeight.bold,
-                        color: kPrimary,
+                        color:      kPrimary,
                       ),
                     ),
-                    const Text('Adherence', style: TextStyle(fontSize: 12)),
+                    const Text('Adherence',
+                        style: TextStyle(fontSize: 12)),
                   ],
                 ),
               ),
@@ -430,12 +420,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     Text(
                       _missedDoses.length.toString(),
                       style: const TextStyle(
-                        fontSize: 24,
+                        fontSize:   24,
                         fontWeight: FontWeight.bold,
-                        color: Colors.red,
+                        color:      Colors.red,
                       ),
                     ),
-                    const Text('Missed', style: TextStyle(fontSize: 12)),
+                    const Text('Missed',
+                        style: TextStyle(fontSize: 12)),
                   ],
                 ),
               ),
@@ -445,12 +436,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     Text(
                       _completedDoses.length.toString(),
                       style: const TextStyle(
-                        fontSize: 24,
+                        fontSize:   24,
                         fontWeight: FontWeight.bold,
-                        color: kAccent,
+                        color:      kAccent,
                       ),
                     ),
-                    const Text('Taken', style: TextStyle(fontSize: 12)),
+                    const Text('Taken',
+                        style: TextStyle(fontSize: 12)),
                   ],
                 ),
               ),
@@ -469,8 +461,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _buildSection(String title, List<Map<String, dynamic>> doses,
-      {bool isMissed = false, bool isCompleted = false}) {
+  Widget _buildSection(
+    String title,
+    List<Map<String, dynamic>> doses, {
+    bool isMissed   = false,
+    bool isCompleted = false,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -480,7 +476,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             title,
             style: TextStyle(
               fontWeight: FontWeight.w600,
-              fontSize: 14,
+              fontSize:   14,
               color: isMissed
                   ? Colors.red
                   : isCompleted
@@ -495,36 +491,34 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildMedicineCard(Map<String, dynamic> dose, bool isMissed) {
-    final baseId = dose['baseId'] as int;
-    final taken = dose['taken'] == true;
-    final name = dose['name'] as String;
-    final hour = dose['hour'] as int;
-    final minute = dose['minute'] as int;
-    final doseNumber = dose['doseNumber'] as int?;
+    final baseId      = dose['baseId']      as int;
+    final taken       = dose['taken']       == true;
+    final name        = dose['name']        as String;
+    final hour        = dose['hour']        as int;
+    final minute      = dose['minute']      as int;
+    final doseNumber  = dose['doseNumber']  as int?;
     final dosesPerDay = dose['dosesPerDay'] as int?;
-    final timeStr = _format(hour, minute);
+    final timeStr     = _format(hour, minute);
 
-    // Calculate time remaining or overdue
-    final now = DateTime.now();
+    final now      = DateTime.now();
     final doseTime = DateTime(now.year, now.month, now.day, hour, minute);
     String timeStatus = '';
-    Color timeColor = kTextGrey;
+    Color  timeColor  = kTextGrey;
+
     if (isMissed) {
-      final diff = now.difference(doseTime);
-      final mins = diff.inMinutes;
-      timeStatus = '⚠ ${mins} min overdue';
-      timeColor = Colors.red;
+      final mins = now.difference(doseTime).inMinutes;
+      timeStatus = '⚠ $mins min overdue';
+      timeColor  = Colors.red;
     } else if (!taken && doseTime.isAfter(now)) {
-      final diff = doseTime.difference(now);
-      final mins = diff.inMinutes;
+      final mins = doseTime.difference(now).inMinutes;
       if (mins < 60) {
         timeStatus = '⏰ in $mins min';
-        timeColor = kPrimary;
+        timeColor  = kPrimary;
       }
     }
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin:    const EdgeInsets.only(bottom: 12),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -544,10 +538,14 @@ class _DashboardScreenState extends State<DashboardScreen>
           child: Row(
             children: [
               Container(
-                width: 48,
+                width:  48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: (taken ? kAccent : (isMissed ? Colors.red : kPrimary))
+                  color: (taken
+                          ? kAccent
+                          : isMissed
+                              ? Colors.red
+                              : kPrimary)
                       .withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -572,26 +570,24 @@ class _DashboardScreenState extends State<DashboardScreen>
                     Text(
                       name,
                       style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
+                          fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(Icons.access_time, size: 12, color: kTextGrey),
+                        const Icon(Icons.access_time,
+                            size: 12, color: kTextGrey),
                         const SizedBox(width: 4),
-                        Text(
-                          timeStr,
-                          style: TextStyle(fontSize: 12, color: kTextGrey),
-                        ),
+                        Text(timeStr,
+                            style: const TextStyle(
+                                fontSize: 12, color: kTextGrey)),
                         if (dosesPerDay != null && dosesPerDay > 1) ...[
                           const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
+                              color:        Colors.grey.shade100,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
@@ -607,37 +603,5 @@ class _DashboardScreenState extends State<DashboardScreen>
                         padding: const EdgeInsets.only(top: 4),
                         child: Text(
                           timeStatus,
-                          style: TextStyle(fontSize: 11, color: timeColor),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: taken
-                      ? kAccent.withOpacity(0.1)
-                      : kPrimary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: taken ? kAccent : kPrimary,
-                  ),
-                ),
-                child: Text(
-                  taken ? 'Undo' : 'Taken',
-                  style: TextStyle(
-                    color: taken ? kAccent : kPrimary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+                          style: TextStyle(
+                              fontSize: 11, color:
