@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../constants.dart';
 import '../services/api_service.dart';
-import '../utils/date_utils.dart'; // shared formatDate utility
+import '../utils/date_utils.dart';
 import '../widgets/common_widgets.dart';
 import 'medicines_screen.dart';
 
@@ -17,7 +17,7 @@ class PrescriptionsListScreen extends StatefulWidget {
 
 class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
   List<Map<String, dynamic>> _prescriptions = [];
-  bool _isLoading = true;
+  bool   _isLoading    = true;
   String _errorMessage = '';
 
   @override
@@ -29,27 +29,30 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
   Future<void> _loadPrescriptions() async {
     if (!mounted) return;
     setState(() {
-      _isLoading = true;
+      _isLoading    = true;
       _errorMessage = '';
     });
 
     try {
-      final response =
-          await ApiService.getWithAuth('$kBaseUrl/api/prescriptions/');
+      // Uses the named wrapper which points to
+      // GET $kBaseUrl/api/prescriptions/ with auth + auto-refresh
+      final response = await ApiService.getPrescriptions();
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
-        _prescriptions = decoded is List
-            ? decoded
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList()
-            : [];
-        setState(() => _isLoading = false);
+        setState(() {
+          _prescriptions = decoded is List
+              ? decoded
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList()
+              : [];
+          _isLoading = false;
+        });
       } else {
-        _setError('Failed to load prescriptions.');
+        _setError('Failed to load prescriptions (${response.statusCode}).');
       }
     } catch (_) {
       _setError('Cannot connect to server.');
@@ -60,7 +63,7 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
     if (!mounted) return;
     setState(() {
       _errorMessage = message;
-      _isLoading = false;
+      _isLoading    = false;
     });
   }
 
@@ -69,37 +72,37 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
       case 'processed':
         return _StatusStyle(
           color: kAccent,
-          icon: Icons.check_circle_outline_rounded,
+          icon:  Icons.check_circle_outline_rounded,
           label: 'Done',
         );
       case 'processing':
         return _StatusStyle(
           color: kPrimary,
-          icon: Icons.hourglass_top_outlined,
+          icon:  Icons.hourglass_top_outlined,
           label: 'Processing',
         );
       case 'pending':
         return _StatusStyle(
           color: const Color(0xFFFF6F00),
-          icon: Icons.schedule_outlined,
+          icon:  Icons.schedule_outlined,
           label: 'Queued',
         );
       case 'processed_empty':
         return _StatusStyle(
           color: kTextGrey,
-          icon: Icons.inbox_outlined,
+          icon:  Icons.inbox_outlined,
           label: 'No data',
         );
       case 'failed':
         return _StatusStyle(
           color: kRed,
-          icon: Icons.error_outline_rounded,
+          icon:  Icons.error_outline_rounded,
           label: 'Failed',
         );
       default:
         return _StatusStyle(
           color: kTextGrey,
-          icon: Icons.help_outline_rounded,
+          icon:  Icons.help_outline_rounded,
           label: status,
         );
     }
@@ -116,10 +119,10 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
         ),
         backgroundColor: kPrimary,
         foregroundColor: kWhite,
-        elevation: 0,
+        elevation:       0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh_rounded),
+            icon:    const Icon(Icons.refresh_rounded),
             onPressed: _loadPrescriptions,
             tooltip: 'Refresh',
           ),
@@ -144,7 +147,7 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                padding: const EdgeInsets.all(20),
+                padding:    const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.grey.shade100,
                   shape: BoxShape.circle,
@@ -157,8 +160,8 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
                 'Connection issue',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                  color: kTextDark,
+                  fontSize:   16,
+                  color:      kTextDark,
                 ),
               ),
               const SizedBox(height: 8),
@@ -172,9 +175,10 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                icon: const Icon(Icons.refresh_rounded, color: kWhite),
+                icon:  const Icon(Icons.refresh_rounded, color: kWhite),
                 label: const Text('Retry',
-                    style: TextStyle(color: kWhite, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: kWhite, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
@@ -182,10 +186,9 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
       );
     }
 
-    // Wrap empty state in RefreshIndicator so user can pull to refresh
     if (_prescriptions.isEmpty) {
       return RefreshIndicator(
-        color: kPrimary,
+        color:     kPrimary,
         onRefresh: _loadPrescriptions,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -196,14 +199,14 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(22),
+                    padding:    const EdgeInsets.all(22),
                     decoration: BoxDecoration(
                       color: kPrimary.withOpacity(0.08),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
                       Icons.description_outlined,
-                      size: 44,
+                      size:  44,
                       color: kPrimary,
                     ),
                   ),
@@ -211,9 +214,9 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
                   const Text(
                     'No prescriptions yet',
                     style: TextStyle(
-                      fontSize: 17,
+                      fontSize:   17,
                       fontWeight: FontWeight.w700,
-                      color: kTextDark,
+                      color:      kTextDark,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -235,32 +238,36 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
     }
 
     return RefreshIndicator(
-      color: kPrimary,
+      color:     kPrimary,
       onRefresh: _loadPrescriptions,
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        padding:   const EdgeInsets.fromLTRB(16, 16, 16, 32),
         itemCount: _prescriptions.length,
         itemBuilder: (context, index) {
           final p = _prescriptions[index];
-          final int id = p['id'] as int? ?? 0;
-          final List meds = p['medicines'] as List? ?? [];
-          final String status = p['status'] as String? ?? 'pending';
-          final String date = AppDateUtils.formatDate(p['created_at'] as String?);
+
+          // AWS backend returns id as either int or string — handle both
+          final String id    = p['id']?.toString() ?? '—';
+          final List   meds  = p['medicines'] as List?  ?? [];
+          final String status = p['status']   as String? ?? 'pending';
+          final String date  =
+              AppDateUtils.formatDate(p['created_at'] as String?);
           final bool canOpen = meds.isNotEmpty;
-          final style = _statusStyle(status);
+          final style        = _statusStyle(status);
 
           return _PrescriptionCard(
-            id: id,
-            meds: meds,
-            status: status,
-            date: date,
-            canOpen: canOpen,
+            id:          id,
+            meds:        meds,
+            status:      status,
+            date:        date,
+            canOpen:     canOpen,
             statusStyle: style,
             onTap: canOpen
                 ? () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => MedicinesScreen(medicines: meds),
+                        builder: (_) =>
+                            MedicinesScreen(medicines: meds),
                       ),
                     )
                 : null,
@@ -271,12 +278,12 @@ class _PrescriptionsListScreenState extends State<PrescriptionsListScreen> {
   }
 }
 
-// ── Status Style model ─────────────────────────────────────────────────────────
+// ── Status Style ───────────────────────────────────────────────────────────────
 
 class _StatusStyle {
-  final Color color;
+  final Color    color;
   final IconData icon;
-  final String label;
+  final String   label;
   const _StatusStyle(
       {required this.color, required this.icon, required this.label});
 }
@@ -284,11 +291,11 @@ class _StatusStyle {
 // ── Prescription Card ──────────────────────────────────────────────────────────
 
 class _PrescriptionCard extends StatelessWidget {
-  final int id;
-  final List meds;
-  final String status;
-  final String date;
-  final bool canOpen;
+  final String       id;
+  final List         meds;
+  final String       status;
+  final String       date;
+  final bool         canOpen;
   final _StatusStyle statusStyle;
   final VoidCallback? onTap;
 
@@ -314,32 +321,31 @@ class _PrescriptionCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: kWhite,
+        color:        kWhite,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: canOpen ? Colors.grey.shade200 : Colors.grey.shade100,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color:      Colors.black.withOpacity(0.04),
             blurRadius: 8,
-            offset: const Offset(0, 2),
+            offset:     const Offset(0, 2),
           ),
         ],
       ),
       child: InkWell(
-        onTap: onTap,
+        onTap:        onTap,
         borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              // Status icon
               Container(
-                width: 48,
+                width:  48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: statusStyle.color.withOpacity(0.1),
+                  color:        statusStyle.color.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(13),
                 ),
                 child: status == 'processing'
@@ -347,7 +353,7 @@ class _PrescriptionCard extends StatelessWidget {
                         padding: EdgeInsets.all(12),
                         child: CircularProgressIndicator(
                           strokeWidth: 2.5,
-                          color: kPrimary,
+                          color:       kPrimary,
                         ),
                       )
                     : Icon(statusStyle.icon,
@@ -355,7 +361,6 @@ class _PrescriptionCard extends StatelessWidget {
               ),
               const SizedBox(width: 14),
 
-              // Info
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -367,8 +372,8 @@ class _PrescriptionCard extends StatelessWidget {
                             'Prescription #$id',
                             style: const TextStyle(
                               fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              color: kTextDark,
+                              fontSize:   15,
+                              color:      kTextDark,
                             ),
                           ),
                         ),
@@ -376,14 +381,14 @@ class _PrescriptionCard extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: statusStyle.color.withOpacity(0.12),
+                            color:        statusStyle.color.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
                             statusStyle.label,
                             style: TextStyle(
-                              fontSize: 11,
-                              color: statusStyle.color,
+                              fontSize:   11,
+                              color:      statusStyle.color,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -393,8 +398,7 @@ class _PrescriptionCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       _subtitle,
-                      style: const TextStyle(
-                          color: kTextGrey, fontSize: 13),
+                      style: const TextStyle(color: kTextGrey, fontSize: 13),
                     ),
                     if (date.isNotEmpty) ...[
                       const SizedBox(height: 3),
@@ -415,7 +419,6 @@ class _PrescriptionCard extends StatelessWidget {
                 ),
               ),
 
-              // Chevron
               if (canOpen) ...[
                 const SizedBox(width: 4),
                 const Icon(Icons.chevron_right_rounded,
