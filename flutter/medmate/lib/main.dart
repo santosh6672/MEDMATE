@@ -17,9 +17,6 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
-  // Timezone initialization is no longer needed for native alarms.
-  // initNotifications() is removed because we now use the native alarm system.
-
   runApp(const MedMateApp());
 }
 
@@ -71,7 +68,9 @@ class _SplashScreenState extends State<_SplashScreen> {
     if (isLoggedIn) {
       final hasAnchors = await AnchorStorage.hasAnchors();
       if (!mounted) return;
-      nextScreen = hasAnchors ? const DashboardScreen() : const AnchorSetupScreen();
+      nextScreen = hasAnchors
+          ? const DashboardScreen()
+          : const AnchorSetupScreen();
     }
 
     Navigator.pushReplacement(
