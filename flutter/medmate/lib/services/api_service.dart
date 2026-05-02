@@ -13,12 +13,8 @@ class ApiService {
   static const String _keyAccess  = 'access';
   static const String _keyRefresh = 'refresh';
 
-  // Headers that every request needs (no auth, no content-type).
-  static const Map<String, String> _baseHeaders = {
-    'ngrok-skip-browser-warning': 'true',
-  };
-
-  static const Duration _timeout = Duration(seconds: 30);
+  static const Duration _timeout     = Duration(seconds: 30);
+  static const Duration _authTimeout = Duration(seconds: 15);
 
   // ── Token storage ──────────────────────────────────────────────────────────
 
@@ -50,28 +46,83 @@ class ApiService {
 
   // ── Headers ────────────────────────────────────────────────────────────────
 
-  /// Builds auth headers.
-  /// Set [includeContentType] to true for requests that send a JSON body.
+  /// Standard headers for all AWS API Gateway requests.
   static Future<Map<String, String>> _authHeaders({
     bool includeContentType = false,
   }) async {
     final token = await getAccessToken();
     return {
-      ..._baseHeaders,
-      if (includeContentType) 'Content-Type': 'application/json',
+      'Content-Type': 'application/json',
       if (token != null && token.isNotEmpty)
         'Authorization': 'Bearer $token',
     };
   }
 
-  // ── Token refresh ──────────────────────────────────────────────────────────
+  /// Headers for Supabase auth endpoints.
+  static Map<String, String> get _supabaseHeaders => {
+    'Content-Type': 'application/json',
+    'apikey': kSupabaseAnonKey,
+  };
 
-  /// Attempts to exchange the stored refresh token for a new access token.
-  /// Returns `true` on success, `false` on any failure.
-  ///
-  /// When ROTATE_REFRESH_TOKENS=True is enabled on the Django backend,
-  /// the response also contains a new refresh token — we save both so the
-  /// next refresh call doesn't 401 with a blacklisted token.
+  // ── Supabase Auth ──────────────────────────────────────────────────────────
+
+  /// Login with email + password via Supabase.
+  /// Returns the full response body map on success, null on failure.
+  static Future<Map<String, dynamic>?> login(
+    String email,
+    String password,
+  ) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(
+              '$kSupabaseUrl/auth/v1/token?grant_type=password',
+            ),
+            headers: _supabaseHeaders,
+            body: jsonEncode({'email': email, 'password': password}),
+          )
+          .timeout(_authTimeout);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final access  = data['access_token']  as String?;
+        final refresh = data['refresh_token'] as String?;
+        if (access != null && refresh != null) {
+          await saveTokens(access, refresh);
+          return data;
+        }
+      }
+      return null;
+    } on SocketException  { return null; }
+      on TimeoutException { return null; }
+      catch (_)           { return null; }
+  }
+
+  /// Sign up a new user via Supabase.
+  static Future<Map<String, dynamic>?> signUp(
+    String email,
+    String password,
+  ) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$kSupabaseUrl/auth/v1/signup'),
+            headers: _supabaseHeaders,
+            body: jsonEncode({'email': email, 'password': password}),
+          )
+          .timeout(_authTimeout);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } on SocketException  { return null; }
+      on TimeoutException { return null; }
+      catch (_)           { return null; }
+  }
+
+  /// Refreshes the Supabase access token using the stored refresh token.
+  /// Returns true on success, false on any failure.
   static Future<bool> refreshToken() async {
     final refresh = await getRefreshToken();
     if (refresh == null || refresh.isEmpty) return false;
@@ -79,71 +130,119 @@ class ApiService {
     try {
       final response = await http
           .post(
-            Uri.parse('$kBaseUrl/api/users/token/refresh/'),
-            headers: {
-              ..._baseHeaders,
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({'refresh': refresh}),
+            Uri.parse(
+              '$kSupabaseUrl/auth/v1/token?grant_type=refresh_token',
+            ),
+            headers: _supabaseHeaders,
+            body: jsonEncode({'refresh_token': refresh}),
           )
-          .timeout(const Duration(seconds: 15));
+          .timeout(_authTimeout);
 
       if (response.statusCode == 200) {
         final data      = jsonDecode(response.body) as Map<String, dynamic>;
-        final newAccess = data['access'] as String?;
+        final newAccess  = data['access_token']  as String?;
+        final newRefresh = data['refresh_token'] as String?;
         if (newAccess == null || newAccess.isEmpty) return false;
-
-        final prefs = await SharedPreferences.getInstance();
-        // Always save the new access token.
-        await prefs.setString(_keyAccess, newAccess);
-        // If the backend rotated the refresh token, save that too.
-        // Without this, the next refresh will 401 with a blacklisted token.
-        final newRefresh = data['refresh'] as String?;
-        if (newRefresh != null && newRefresh.isNotEmpty) {
-          await prefs.setString(_keyRefresh, newRefresh);
-        }
+        await saveTokens(newAccess, newRefresh ?? refresh);
         return true;
       }
+      return false;
+    } on SocketException  { return false; }
+      on TimeoutException { return false; }
+      catch (_)           { return false; }
+  }
 
-      return false;
-    } on SocketException {
-      return false;
-    } on http.ClientException {
-      return false;
-    } on TimeoutException {
-      return false;
+  /// Logs out the current user and clears stored tokens.
+  static Future<void> logout() async {
+    final token = await getAccessToken();
+    if (token != null) {
+      try {
+        await http
+            .post(
+              Uri.parse('$kSupabaseUrl/auth/v1/logout'),
+              headers: {
+                ..._supabaseHeaders,
+                'Authorization': 'Bearer $token',
+              },
+            )
+            .timeout(_authTimeout);
+      } catch (_) {}
+    }
+    await clearTokens();
+  }
+
+  // ── AWS API Gateway — Prescriptions ───────────────────────────────────────
+
+  /// GET /health — checks if the backend is alive.
+  static Future<bool> healthCheck() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$kBaseUrl/health'))
+          .timeout(_authTimeout);
+      return response.statusCode == 200;
     } catch (_) {
       return false;
     }
   }
 
-  // ── Public POST (no auth header) ──────────────────────────────────────────
+  /// POST /api/prescriptions/ — upload a prescription image (multipart).
+  /// [imageFile] is the image picked from the camera/gallery.
+  static Future<http.Response> uploadPrescription(File imageFile) async {
+    final token   = await getAccessToken();
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$kBaseUrl/api/prescriptions/'),
+    );
 
-  /// Sends a POST request WITHOUT an Authorization header.
-  /// Use this for public endpoints: /login/, /register/, /token/refresh/.
-  /// Using postWithAuth on these endpoints attaches a stale/empty Bearer
-  /// token which Django rejects before the view runs → 401.
-  static Future<http.Response> postPublic(
-    String url,
-    Map<String, dynamic> body,
-  ) async {
-    return http
-        .post(
-          Uri.parse(url),
-          headers: {
-            ..._baseHeaders,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(body),
-        )
-        .timeout(_timeout);
+    request.headers.addAll({
+      if (token != null && token.isNotEmpty)
+        'Authorization': 'Bearer $token',
+    });
+
+    request.files.add(
+      await http.MultipartFile.fromPath('file', imageFile.path),
+    );
+
+    final streamed  = await request.send().timeout(_timeout);
+    final response  = await http.Response.fromStream(streamed);
+
+    // If 401, refresh and retry once.
+    if (response.statusCode == 401 && await refreshToken()) {
+      final newToken  = await getAccessToken();
+      final retryReq  = http.MultipartRequest(
+        'POST',
+        Uri.parse('$kBaseUrl/api/prescriptions/'),
+      );
+      retryReq.headers.addAll({
+        if (newToken != null) 'Authorization': 'Bearer $newToken',
+      });
+      retryReq.files.add(
+        await http.MultipartFile.fromPath('file', imageFile.path),
+      );
+      final retryStreamed = await retryReq.send().timeout(_timeout);
+      return http.Response.fromStream(retryStreamed);
+    }
+
+    return response;
   }
 
-  // ── GET with auth + auto-refresh ───────────────────────────────────────────
+  /// GET /api/prescriptions/ — fetch all prescriptions for the current user.
+  static Future<http.Response> getPrescriptions() async {
+    return getWithAuth('$kBaseUrl/api/prescriptions/');
+  }
 
-  /// Sends an authenticated GET request.
-  /// If the server returns 401 the token is refreshed once and the call
-  /// is retried automatically.
+  /// GET /api/prescriptions/{id} — fetch a single prescription by ID.
+  static Future<http.Response> getPrescription(String id) async {
+    return getWithAuth('$kBaseUrl/api/prescriptions/$id');
+  }
+
+  /// DELETE /api/prescriptions/{id} — delete a prescription by ID.
+  static Future<http.Response> deletePrescription(String id) async {
+    return deleteWithAuth('$kBaseUrl/api/prescriptions/$id');
+  }
+
+  // ── Core HTTP helpers with auth + auto-refresh ────────────────────────────
+
   static Future<http.Response> getWithAuth(String url) async {
     var headers  = await _authHeaders();
     var response = await http
@@ -156,75 +255,45 @@ class ApiService {
           .get(Uri.parse(url), headers: headers)
           .timeout(_timeout);
     }
-
     return response;
   }
 
-  // ── POST with auth + auto-refresh ──────────────────────────────────────────
-
-  /// Sends an authenticated POST request with a JSON [body].
-  /// If the server returns 401 the token is refreshed once and the call
-  /// is retried automatically.
   static Future<http.Response> postWithAuth(
     String url,
     Map<String, dynamic> body,
   ) async {
     var headers  = await _authHeaders(includeContentType: true);
     var response = await http
-        .post(
-          Uri.parse(url),
-          headers: headers,
-          body:    jsonEncode(body),
-        )
+        .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
         .timeout(_timeout);
 
     if (response.statusCode == 401 && await refreshToken()) {
       headers  = await _authHeaders(includeContentType: true);
       response = await http
-          .post(
-            Uri.parse(url),
-            headers: headers,
-            body:    jsonEncode(body),
-          )
+          .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
           .timeout(_timeout);
     }
-
     return response;
   }
 
-  // ── PATCH with auth + auto-refresh ─────────────────────────────────────────
-
-  /// Sends an authenticated PATCH request with a JSON [body].
   static Future<http.Response> patchWithAuth(
     String url,
     Map<String, dynamic> body,
   ) async {
     var headers  = await _authHeaders(includeContentType: true);
     var response = await http
-        .patch(
-          Uri.parse(url),
-          headers: headers,
-          body:    jsonEncode(body),
-        )
+        .patch(Uri.parse(url), headers: headers, body: jsonEncode(body))
         .timeout(_timeout);
 
     if (response.statusCode == 401 && await refreshToken()) {
       headers  = await _authHeaders(includeContentType: true);
       response = await http
-          .patch(
-            Uri.parse(url),
-            headers: headers,
-            body:    jsonEncode(body),
-          )
+          .patch(Uri.parse(url), headers: headers, body: jsonEncode(body))
           .timeout(_timeout);
     }
-
     return response;
   }
 
-  // ── DELETE with auth + auto-refresh ────────────────────────────────────────
-
-  /// Sends an authenticated DELETE request.
   static Future<http.Response> deleteWithAuth(String url) async {
     var headers  = await _authHeaders();
     var response = await http
@@ -237,7 +306,6 @@ class ApiService {
           .delete(Uri.parse(url), headers: headers)
           .timeout(_timeout);
     }
-
     return response;
   }
 }
