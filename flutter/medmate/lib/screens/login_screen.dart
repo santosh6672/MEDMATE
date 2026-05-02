@@ -1,8 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/reminder_storage.dart';
 import '../services/anchor_storage.dart';
@@ -22,8 +21,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController    = TextEditingController();
   final _passwordController = TextEditingController();
 
-  bool _isLoading    = false;
-  bool _showPassword = false;
+  bool   _isLoading    = false;
+  bool   _showPassword = false;
   String _errorMessage = '';
 
   @override
@@ -50,40 +49,24 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      // FIX: Login is a PUBLIC endpoint — use postPublic, not postWithAuth.
-      // postWithAuth attaches an Authorization header which Django rejects
-      // before the view runs, producing a 401 even with correct credentials.
-      final response = await ApiService.postPublic(
-        '$kBaseUrl/api/users/login/',
-        {
-          'email':    email,
-          'password': password,
-        },
-      );
+      // Supabase login — returns access_token + refresh_token
+      final data = await ApiService.login(email, password);
 
       if (!mounted) return;
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-        final access  = data['access']  as String?;
-        final refresh = data['refresh'] as String?;
-
-        if (access == null || refresh == null) {
-          _setError('Login failed. Please try again.');
-          return;
-        }
-
+      if (data != null) {
         await ReminderStorage.clearAll();
-        await ApiService.saveTokens(access, refresh);
 
-        // Save username if present in response
-        final username = data['username'] as String? ?? data['first_name'] as String? ?? 'User';
+        // Save display name from Supabase user metadata if available
+        final userMeta = data['user']?['user_metadata'] as Map<String, dynamic>?;
+        final username = userMeta?['username'] as String?
+            ?? userMeta?['full_name'] as String?
+            ?? email.split('@').first;
+
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('username', username);
 
         final hasAnchors = await AnchorStorage.hasAnchors();
-
         if (!mounted) return;
 
         Navigator.pushAndRemoveUntil(
@@ -95,28 +78,14 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           (_) => false,
         );
-      } else if (response.statusCode == 400) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        _setError(_extractError(data));
-      } else if (response.statusCode == 401) {
-        _setError('Wrong email or password.');
       } else {
-        _setError('Login failed (${response.statusCode}).');
+        _setError('Wrong email or password.');
       }
     } catch (_) {
       _setError('Cannot connect to server.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  String _extractError(Map<String, dynamic> data) {
-    for (final key in ['email', 'password', 'detail', 'non_field_errors']) {
-      final val = data[key];
-      if (val is List && val.isNotEmpty) return val.first.toString();
-      if (val is String && val.isNotEmpty) return val;
-    }
-    return 'Login failed. Please try again.';
   }
 
   void _setError(String message) {
@@ -145,9 +114,9 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 20),
 
               TextField(
-                controller:  _emailController,
+                controller:   _emailController,
                 keyboardType: TextInputType.emailAddress,
-                decoration:  inputDecoration('Email', Icons.email_outlined),
+                decoration:   inputDecoration('Email', Icons.email_outlined),
               ),
 
               const SizedBox(height: 16),
