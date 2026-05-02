@@ -8,7 +8,7 @@ import '../constants.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import '../services/reminder_storage.dart';
-import '../utils/date_utils.dart'; // shared formatDate utility
+import '../utils/date_utils.dart';
 import '../widgets/common_widgets.dart';
 import 'change_password_screen.dart';
 import 'start_screen.dart';
@@ -23,9 +23,9 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _profile;
-  bool _isLoading = true;
+  bool   _isLoading    = true;
   String _errorMessage = '';
-  String _appVersion = '';
+  String _appVersion   = '';
 
   @override
   void initState() {
@@ -33,8 +33,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadProfile();
     _loadVersion();
   }
-
-  // ── Data ────────────────────────────────────────────────────────────────────
 
   Future<void> _loadVersion() async {
     try {
@@ -48,52 +46,61 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadProfile() async {
     if (!mounted) return;
     setState(() {
-      _isLoading = true;
+      _isLoading    = true;
       _errorMessage = '';
     });
 
     try {
-      final response =
-          await ApiService.getWithAuth('$kBaseUrl/api/users/profile/');
+      final prefs    = await SharedPreferences.getInstance();
+      final username = prefs.getString('username') ?? 'User';
+
+      // Decode email from stored JWT access token payload.
+      // dart:convert is imported at the top — no inline import needed.
+      String email = '';
+      final token = await ApiService.getAccessToken();
+      if (token != null && token.isNotEmpty) {
+        email = _emailFromJwt(token);
+      }
 
       if (!mounted) return;
+      setState(() {
+        _profile = {'username': username, 'email': email};
+        _isLoading = false;
+      });
+    } catch (_) {
+      _setError('Could not load profile.');
+    }
+  }
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data is Map<String, dynamic>) {
-          setState(() {
-            _profile = data;
-            _isLoading = false;
-          });
-        } else {
-          _setError('Unexpected response from server.');
-        }
-      } else {
-        _setError('Failed to load profile (${response.statusCode}).');
+  /// Decodes the email claim from a Supabase JWT payload.
+  /// Supabase JWTs are standard base64url-encoded JSON.
+  String _emailFromJwt(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) return '';
+
+      // Base64url → standard Base64 with padding
+      String payload = parts[1]
+          .replaceAll('-', '+')
+          .replaceAll('_', '/');
+      switch (payload.length % 4) {
+        case 2: payload += '=='; break;
+        case 3: payload += '=';  break;
+        default: break;
       }
-    } on Exception {
-      _setError('Cannot connect to server. Check your internet connection.');
+
+      final decoded = utf8.decode(base64.decode(payload));
+      final map     = jsonDecode(decoded) as Map<String, dynamic>;
+      return map['email'] as String? ?? '';
+    } catch (_) {
+      return '';
     }
   }
 
   Future<void> _logout() async {
     await cancelAllNotifications();
     await ReminderStorage.clearAll();
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final refresh = prefs.getString('refresh') ?? '';
-      if (refresh.isNotEmpty) {
-        await ApiService.postWithAuth(
-          '$kBaseUrl/api/users/logout/',
-          {'refresh': refresh},
-        );
-      }
-    } on Exception {
-      // Best-effort server logout
-    }
-
-    await ApiService.clearTokens();
+    await ApiService.logout();
 
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
@@ -103,13 +110,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-
   void _setError(String message) {
     if (!mounted) return;
     setState(() {
       _errorMessage = message;
-      _isLoading = false;
+      _isLoading    = false;
     });
   }
 
@@ -122,32 +127,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
   }
 
-  // ── Dialogs ──────────────────────────────────────────────────────────────────
-
   void _confirmLogout() {
     showDialog<void>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
         actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         title: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
+              padding:    const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: kRed.withOpacity(0.1),
+                color:        kRed.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Icon(Icons.logout_rounded, color: kRed, size: 20),
             ),
             const SizedBox(width: 12),
-            const Text(
-              'Logout',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
-            ),
+            const Text('Logout',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
           ],
         ),
         content: const Text(
@@ -158,55 +157,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
           OutlinedButton(
             onPressed: () => Navigator.pop(context),
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: Colors.grey.shade300),
-              shape: RoundedRectangleBorder(
+              side:    BorderSide(color: Colors.grey.shade300),
+              shape:   RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             ),
-            child: Text(
-              'Cancel',
-              style: TextStyle(
-                  color: Colors.grey.shade700, fontWeight: FontWeight.w600),
-            ),
+            child: Text('Cancel',
+                style: TextStyle(
+                    color:      Colors.grey.shade700,
+                    fontWeight: FontWeight.w600)),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: kRed,
-              shape: RoundedRectangleBorder(
+              shape:   RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             ),
             onPressed: () {
               Navigator.pop(context);
               _logout();
             },
-            child: const Text(
-              'Logout',
-              style: TextStyle(
-                  color: kWhite, fontWeight: FontWeight.w600),
-            ),
+            child: const Text('Logout',
+                style: TextStyle(color: kWhite, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
     );
   }
 
-  // ── Build ────────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
-        title: const Text(
-          'Profile',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
+        title: const Text('Profile',
+            style: TextStyle(fontWeight: FontWeight.w700)),
         backgroundColor: kPrimary,
         foregroundColor: kWhite,
-        elevation: 0,
+        elevation:       0,
       ),
       body: _buildBody(),
     );
@@ -214,9 +203,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: kPrimary),
-      );
+      return const Center(child: CircularProgressIndicator(color: kPrimary));
     }
 
     if (_errorMessage.isNotEmpty) {
@@ -227,7 +214,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(20),
+                padding:    const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.grey.shade100,
                   shape: BoxShape.circle,
@@ -245,7 +232,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                 ),
-                icon: const Icon(Icons.refresh_rounded, color: kWhite),
+                icon:  const Icon(Icons.refresh_rounded, color: kWhite),
                 label: const Text('Retry',
                     style: TextStyle(
                         color: kWhite, fontWeight: FontWeight.w600)),
@@ -257,73 +244,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     return RefreshIndicator(
-      color: kPrimary,
+      color:     kPrimary,
       onRefresh: _loadProfile,
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         child: Column(
           children: [
-            // Header
             _ProfileHeader(
               initials: _initials,
               username: _profile?['username'] as String? ?? '—',
-              email: _profile?['email'] as String? ?? '—',
+              email:    _profile?['email']    as String? ?? '—',
             ),
             const SizedBox(height: 20),
-
-            // Info card
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _InfoCard(
                 rows: [
                   _ProfileRowData(
-                    icon: Icons.person_outline_rounded,
+                    icon:  Icons.person_outline,
                     label: 'Username',
                     value: _profile?['username'] as String? ?? '—',
                   ),
                   _ProfileRowData(
-                    icon: Icons.email_outlined,
+                    icon:  Icons.email_outlined,
                     label: 'Email',
                     value: _profile?['email'] as String? ?? '—',
                   ),
                   _ProfileRowData(
-                    icon: Icons.calendar_today_outlined,
-                    label: 'Member since',
-                    value: AppDateUtils.formatDate(
-                        _profile?['date_joined'] as String?),
+                    icon:  Icons.info_outline,
+                    label: 'App Version',
+                    value: _appVersion.isNotEmpty ? 'v$_appVersion' : '—',
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
-
-            // Actions card
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _ActionsCard(
                 onEditSchedule: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const AnchorSetupScreen(isEditing: true),
-                  ),
+                      builder: (_) => const AnchorSetupScreen()),
                 ),
                 onChangePassword: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const ChangePasswordScreen(),
-                  ),
+                      builder: (_) => const ChangePasswordScreen()),
                 ),
                 onLogout: _confirmLogout,
               ),
             ),
-            const SizedBox(height: 32),
-
-            // Version
-            Text(
-              'MedMate v${_appVersion.isNotEmpty ? _appVersion : '—'}',
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-            ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 30),
           ],
         ),
       ),
@@ -347,71 +319,55 @@ class _ProfileHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 36),
+      width:   double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 32),
       decoration: const BoxDecoration(
-        color: kPrimary,
+        color:        kPrimary,
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
       ),
       child: Column(
         children: [
-          // Avatar — non-tappable, purely decorative
           Stack(
-            alignment: Alignment.bottomRight,
             children: [
-              Container(
-                width: 84,
-                height: 84,
-                decoration: BoxDecoration(
-                  color: kWhite.withOpacity(0.2),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: kWhite.withOpacity(0.4),
-                    width: 2,
-                  ),
-                ),
-                child: Center(
-                  child: Text(
-                    initials,
-                    style: const TextStyle(
-                      color: kWhite,
-                      fontSize: 30,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1,
-                    ),
+              CircleAvatar(
+                radius:          44,
+                backgroundColor: kWhite,
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    color:         kPrimary,
+                    fontSize:      30,
+                    fontWeight:    FontWeight.w800,
+                    letterSpacing: 1,
                   ),
                 ),
               ),
-              // Online indicator
-              Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: kAccent,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: kPrimary, width: 2.5),
+              Positioned(
+                bottom: 0,
+                right:  0,
+                child: Container(
+                  width:  18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color:  kAccent,
+                    shape:  BoxShape.circle,
+                    border: Border.all(color: kPrimary, width: 2.5),
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          Text(
-            username,
-            style: const TextStyle(
-              color: kWhite,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.2,
-            ),
-          ),
+          Text(username,
+              style: const TextStyle(
+                  color:         kWhite,
+                  fontSize:      22,
+                  fontWeight:    FontWeight.w800,
+                  letterSpacing: 0.2)),
           const SizedBox(height: 4),
-          Text(
-            email,
-            style: TextStyle(
-              color: kWhite.withOpacity(0.75),
-              fontSize: 14,
-            ),
-          ),
+          Text(email,
+              style: TextStyle(
+                  color:    kWhite.withOpacity(0.75), fontSize: 14)),
         ],
       ),
     );
@@ -422,8 +378,8 @@ class _ProfileHeader extends StatelessWidget {
 
 class _ProfileRowData {
   final IconData icon;
-  final String label;
-  final String value;
+  final String   label;
+  final String   value;
   const _ProfileRowData(
       {required this.icon, required this.label, required this.value});
 }
@@ -436,14 +392,14 @@ class _InfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: kWhite,
+        color:        kWhite,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border:       Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color:      Colors.black.withOpacity(0.03),
             blurRadius: 8,
-            offset: const Offset(0, 2),
+            offset:     const Offset(0, 2),
           ),
         ],
       ),
@@ -451,13 +407,15 @@ class _InfoCard extends StatelessWidget {
         children: [
           for (int i = 0; i < rows.length; i++) ...[
             _ProfileRow(
-              icon: rows[i].icon,
-              label: rows[i].label,
-              value: rows[i].value,
-            ),
+                icon: rows[i].icon,
+                label: rows[i].label,
+                value: rows[i].value),
             if (i < rows.length - 1)
-              Divider(height: 1, indent: 52, endIndent: 16,
-                  color: Colors.grey.shade100),
+              Divider(
+                  height:    1,
+                  indent:    52,
+                  endIndent: 16,
+                  color:     Colors.grey.shade100),
           ],
         ],
       ),
@@ -467,14 +425,11 @@ class _InfoCard extends StatelessWidget {
 
 class _ProfileRow extends StatelessWidget {
   final IconData icon;
-  final String label;
-  final String value;
+  final String   label;
+  final String   value;
 
-  const _ProfileRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
+  const _ProfileRow(
+      {required this.icon, required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -483,10 +438,10 @@ class _ProfileRow extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: 36,
+            width:  36,
             height: 36,
             decoration: BoxDecoration(
-              color: kPrimary.withOpacity(0.08),
+              color:        kPrimary.withOpacity(0.08),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon, color: kPrimary, size: 18),
@@ -496,24 +451,18 @@ class _ProfileRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: kTextGrey,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.2,
-                  ),
-                ),
+                Text(label,
+                    style: const TextStyle(
+                        fontSize:      11,
+                        color:         kTextGrey,
+                        fontWeight:    FontWeight.w500,
+                        letterSpacing: 0.2)),
                 const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: kTextDark,
-                  ),
-                ),
+                Text(value,
+                    style: const TextStyle(
+                        fontSize:   14,
+                        fontWeight: FontWeight.w600,
+                        color:      kTextDark)),
               ],
             ),
           ),
@@ -540,44 +489,46 @@ class _ActionsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: kWhite,
+        color:        kWhite,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border:       Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color:      Colors.black.withOpacity(0.03),
             blurRadius: 8,
-            offset: const Offset(0, 2),
+            offset:     const Offset(0, 2),
           ),
         ],
       ),
       child: Column(
         children: [
           _ActionRow(
-            icon: Icons.schedule_rounded,
-            label: 'Edit Daily Schedule',
-            subtitle: 'Meals & wake/sleep times',
+            icon:      Icons.schedule_rounded,
+            label:     'Edit Daily Schedule',
+            subtitle:  'Meals & wake/sleep times',
             iconColor: kPrimary,
-            onTap: onEditSchedule,
+            onTap:     onEditSchedule,
           ),
-          Divider(height: 1, indent: 52, endIndent: 16,
+          Divider(
+              height: 1, indent: 52, endIndent: 16,
               color: Colors.grey.shade100),
           _ActionRow(
-            icon: Icons.lock_reset_outlined,
-            label: 'Change Password',
-            subtitle: 'Update your account password',
+            icon:      Icons.lock_reset_outlined,
+            label:     'Change Password',
+            subtitle:  'Update your account password',
             iconColor: kPrimary,
-            onTap: onChangePassword,
+            onTap:     onChangePassword,
           ),
-          Divider(height: 1, indent: 52, endIndent: 16,
+          Divider(
+              height: 1, indent: 52, endIndent: 16,
               color: Colors.grey.shade100),
           _ActionRow(
-            icon: Icons.logout_rounded,
-            label: 'Logout',
-            subtitle: 'Sign out of your account',
-            iconColor: kRed,
+            icon:       Icons.logout_rounded,
+            label:      'Logout',
+            subtitle:   'Sign out of your account',
+            iconColor:  kRed,
             labelColor: kRed,
-            onTap: onLogout,
+            onTap:      onLogout,
           ),
         ],
       ),
@@ -586,11 +537,11 @@ class _ActionsCard extends StatelessWidget {
 }
 
 class _ActionRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String subtitle;
-  final Color iconColor;
-  final Color labelColor;
+  final IconData     icon;
+  final String       label;
+  final String       subtitle;
+  final Color        iconColor;
+  final Color        labelColor;
   final VoidCallback onTap;
 
   const _ActionRow({
@@ -605,17 +556,17 @@ class _ActionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: onTap,
+      onTap:        onTap,
       borderRadius: BorderRadius.circular(16),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
             Container(
-              width: 36,
+              width:  36,
               height: 36,
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.08),
+                color:        iconColor.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(icon, color: iconColor, size: 18),
@@ -625,22 +576,15 @@ class _ActionRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: labelColor,
-                    ),
-                  ),
+                  Text(label,
+                      style: TextStyle(
+                          fontSize:   14,
+                          fontWeight: FontWeight.w600,
+                          color:      labelColor)),
                   const SizedBox(height: 1),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: kTextGrey,
-                    ),
-                  ),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          fontSize: 11, color: kTextGrey)),
                 ],
               ),
             ),
