@@ -1,27 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ── Internet & Storage ──────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-
-    <!-- ── Notifications (Android 13+ / API 33+ REQUIRED) ────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-
-    <!-- ── Exact Alarms ───────────────────────────────────────────────── -->
-    <!-- SCHEDULE_EXACT_ALARM: user must grant manually in Settings (API 31+) -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-    <!-- USE_EXACT_ALARM: auto-granted, no user prompt needed (API 33+)    -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
-
-    <!-- ── Wake / Alarm support ──────────────────────────────────────── -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-
-    <!-- ── Full-screen intent (API 34+ needs explicit declaration) ──── -->
     <uses-permission
         android:name="android.permission.USE_FULL_SCREEN_INTENT"
         android:minSdkVersion="34"/>
@@ -32,7 +21,6 @@
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
 
-        <!-- ── MAIN ACTIVITY ─────────────────────────────────────────── -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -40,28 +28,27 @@
             android:theme="@style/LaunchTheme"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-
         </activity>
 
-        <!-- ── ALARM ACTIVITY ────────────────────────────────────────── -->
+        <!-- ✅ Fixed: showWhenLocked, exported=false, added launchMode + excludeFromRecents -->
         <activity
             android:name=".AlarmActivity"
-            android:exported="true"
-            android:showOnLockScreen="true"
+            android:exported="false"
+            android:showWhenLocked="true"
             android:turnScreenOn="true"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
             android:theme="@style/LaunchTheme"/>
 
-        <!-- ── APP ALARM RECEIVER ─────────────────────────────────────── -->
+        <!-- ✅ Fixed: exported=false (only called by your own AlarmManager) -->
         <receiver
             android:name=".AlarmReceiver"
-            android:exported="true"/>
+            android:exported="false"/>
 
-        <!-- ── APP BOOT RECEIVER ──────────────────────────────────────── -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
@@ -72,13 +59,10 @@
             </intent-filter>
         </receiver>
 
-        <!-- ── flutter_local_notifications: fires scheduled alarms ───── -->
-        <!--   REQUIRED — without this, zonedSchedule silently does nothing -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false"/>
 
-        <!-- ── flutter_local_notifications: reschedules on device reboot  -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
             android:exported="true"
@@ -87,7 +71,6 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
                 <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
-                <!-- HTC devices -->
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
